@@ -3,11 +3,400 @@ import { useNavigate } from 'react-router';
 import {
   Camera, Upload, Image as ImageIcon, X, Search, MapPin, Star, Clock, Plane,
   ChevronRight, Sparkles, Building2, Mountain, Globe, Compass, Heart, Eye, Loader2,
-  Clipboard, Smartphone, AlertCircle, CheckCircle2, TrendingUp, Hotel, Activity
+  Clipboard, Smartphone, AlertCircle, CheckCircle2, TrendingUp, Hotel, Activity, Key
 } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { simulateImageRecognition, LandmarkEntry, categoryLabels } from '../data/visualSearchData';
+import { simulateImageRecognition, LandmarkEntry, categoryLabels, landmarkDatabase } from '../data/visualSearchData';
 import { toast } from 'sonner@2.0.3';
+import { resolveGeminiKey } from '../services/voiceAI';
+
+// ── Gemini identification result (richer than before) ─────────────────────────
+interface GeminiIdentification {
+  name: string;
+  aliases: string[];
+  city: string;
+  country: string;
+  region: string;
+  category: string;
+  destinationType: string;
+  description: string;
+  confidence: number;
+  searchKeywords: string[];
+  alternativeGuesses: { name: string; city: string; country: string; confidence: number }[];
+}
+
+// ── Compress large images to ≤1024px before upload (faster, more reliable) ────
+function compressImage(base64: string, maxDim = 1024, quality = 0.85): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        const ratio = Math.min(maxDim / width, maxDim / height);
+        width = Math.round(width * ratio);
+        height = Math.round(height * ratio);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', quality).split(',')[1]);
+    };
+    img.onerror = () => resolve(base64); // fallback to original
+    img.src = `data:image/jpeg;base64,${base64}`;
+  });
+}
+
+// ── Convert a LandmarkEntry to GeminiIdentification format ────────────────────
+function landmarkToIdent(entry: LandmarkEntry, confidence: number): GeminiIdentification {
+  return {
+    name: entry.name,
+    aliases: entry.similarDestinations?.slice(0, 2) ?? [],
+    city: entry.city,
+    country: entry.country,
+    region: '',
+    category: entry.category,
+    destinationType: (entry.subcategory ?? 'monument').toLowerCase(),
+    description: entry.description,
+    confidence,
+    searchKeywords: entry.tags,
+    alternativeGuesses: [],
+  };
+}
+
+// ── Match a BLIP caption string against our local landmark database ────────────
+function matchCaptionToLandmark(caption: string): GeminiIdentification | null {
+  const lower = caption.toLowerCase();
+
+  // Priority 1: Landmark name appears verbatim in caption
+  for (const entry of landmarkDatabase) {
+    if (lower.includes(entry.name.toLowerCase())) {
+      return landmarkToIdent(entry, 92);
+    }
+  }
+
+  // Priority 2: City + subcategory keyword both appear (e.g. "temple in bali")
+  for (const entry of landmarkDatabase) {
+    const cityHit = entry.city && lower.includes(entry.city.toLowerCase());
+    const subHit  = entry.subcategory && lower.includes(entry.subcategory.toLowerCase());
+    if (cityHit && subHit) return landmarkToIdent(entry, 78);
+  }
+
+  // Priority 3: City name alone
+  for (const entry of landmarkDatabase) {
+    if (entry.city && lower.includes(entry.city.toLowerCase())) {
+      return landmarkToIdent(entry, 62);
+    }
+  }
+
+  // Priority 4: Country + at least one tag keyword
+  for (const entry of landmarkDatabase) {
+    const countryHit = entry.country && lower.includes(entry.country.toLowerCase());
+    const tagHit = entry.tags.some(t => t.length > 3 && lower.includes(t));
+    if (countryHit && tagHit) return landmarkToIdent(entry, 48);
+  }
+
+  return null;
+}
+
+// ── HuggingFace BLIP: free image captioning for landmark identification ─────────
+// Uses Salesforce/blip-image-captioning-large (free, no credit card needed).
+// Optionally paste a free HF token from https://huggingface.co/settings/tokens
+// to get higher rate limits. Leave empty for anonymous access.
+const HF_TOKEN = '';
+
+async function identifyImageWithHuggingFace(
+  base64Data: string,
+  mimeType: string,
+): Promise<GeminiIdentification | null> {
+  if (!base64Data) return null;
+
+  // Convert base64 → Blob (BLIP requires binary upload, not JSON base64)
+  let imageBlob: Blob;
+  try {
+    const bin = atob(base64Data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    imageBlob = new Blob([bytes], { type: mimeType || 'image/jpeg' });
+  } catch {
+    return null;
+  }
+
+  const headers: Record<string, string> = { 'Content-Type': mimeType || 'image/jpeg' };
+  if (HF_TOKEN) headers['Authorization'] = `Bearer ${HF_TOKEN}`;
+
+  // Try BLIP-large first, fall back to the lighter vit-gpt2 model
+  for (const model of [
+    'Salesforce/blip-image-captioning-large',
+    'nlpconnect/vit-gpt2-image-captioning',
+  ]) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000); // 20-second cap
+
+      const resp = await fetch(
+        `https://api-inference.huggingface.co/models/${model}`,
+        { method: 'POST', headers, body: imageBlob, signal: controller.signal },
+      );
+      clearTimeout(timeout);
+
+      if (resp.status === 503) {
+        // Model is cold-starting on HF — skip to next model/fallback
+        console.warn(`HF ${model}: model loading (503), trying next`);
+        continue;
+      }
+      if (resp.status === 429) {
+        // Rate-limited without token — Gemini will pick up
+        console.warn('HF: rate limited (429), falling back to Gemini');
+        return null;
+      }
+      if (!resp.ok) { console.warn(`HF ${model}: ${resp.status}`); continue; }
+
+      const data = await resp.json();
+      const caption: string = Array.isArray(data)
+        ? (data[0]?.generated_text ?? '')
+        : (data?.generated_text ?? '');
+
+      if (!caption.trim()) continue;
+      console.log(`HF ${model} → "${caption}"`);
+
+      // Try to match against our curated landmark DB
+      const matched = matchCaptionToLandmark(caption);
+      if (matched) return matched;
+
+      // Caption exists but no DB match — return a rough result so Gemini can refine
+      return {
+        name: caption.split(/[,.]/, 1)[0].trim() || 'Unknown Destination',
+        aliases: [],
+        city: '', country: '', region: '',
+        category: 'Scenic', destinationType: 'other',
+        description: caption,
+        confidence: 38,
+        searchKeywords: caption.toLowerCase().split(/\s+/).filter(w => w.length > 4).slice(0, 5),
+        alternativeGuesses: [],
+      };
+    } catch (err: any) {
+      if (err?.name === 'AbortError') console.warn(`HF ${model}: timeout`);
+      else console.warn(`HF ${model} error:`, err);
+    }
+  }
+  return null;
+}
+
+// ── Gemini Vision: identify a travel destination from an image ─────────────────
+async function identifyImageWithGemini(
+  base64Data: string,
+  mimeType: string,
+  apiKey: string,
+): Promise<GeminiIdentification | null> {
+
+  // System instruction: forces the model into strict identification mode
+  const systemInstruction = `You are a precision landmark and travel destination identification engine.
+Your ONLY job is to name the EXACT landmark or location shown in an image — no generalizations, no hedging.
+Golden rule: if you can see it, name it exactly. "Taj Mahal" not "Indian mausoleum". "Eiffel Tower" not "Paris tower". "Colosseum" not "ancient ruins".`;
+
+  // Lean prompt — fewer fields = less room to hedge
+  const prompt = `Identify the EXACT landmark, monument, or travel destination in this image.
+
+STRICT RULES:
+1. Always return the single most precise, universally-recognized name.
+2. Never substitute a category description for a specific name.
+3. For any of the Seven Wonders, UNESCO sites, or globally famous landmarks — name them EXACTLY.
+4. For Indian landmarks: Taj Mahal / Hawa Mahal / Gateway of India / Qutub Minar / Red Fort — not "Mughal architecture" or "Indian palace".
+5. For natural wonders: "Grand Canyon" / "Victoria Falls" / "Mount Everest" — not "canyon" or "waterfall".
+6. confidence = how certain you are (0–100). Be honest.
+
+Return ONLY this JSON, no markdown, no extra text:
+{
+  "name": "EXACT name of the landmark or destination",
+  "aliases": ["alternate or local name if any"],
+  "city": "nearest city",
+  "country": "country",
+  "region": "state or province",
+  "category": "Architecture|Historical|Nature|Adventure|Scenic|Cultural",
+  "destinationType": "monument|temple|palace|beach|mountain|ruins|waterfall|island|skyline|canyon|forest|desert|lake|garden|other",
+  "description": "1–2 sentence travel description",
+  "confidence": 95,
+  "searchKeywords": ["keyword1", "keyword2"],
+  "alternativeGuesses": [
+    {"name": "second best guess", "city": "city", "country": "country", "confidence": 40}
+  ]
+}`;
+
+  // Try models in order: prefer 2.0-flash for sharper vision, fall back to 1.5-flash
+  for (const model of ['gemini-2.0-flash', 'gemini-1.5-flash']) {
+    try {
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system_instruction: { parts: [{ text: systemInstruction }] },
+            contents: [{
+              parts: [
+                { text: prompt },
+                { inline_data: { mime_type: mimeType, data: base64Data } },
+              ],
+            }],
+            generationConfig: {
+              temperature: 0,        // zero temperature = most deterministic answer
+              maxOutputTokens: 500,
+              topP: 1,
+              topK: 1,               // always pick the single most likely token
+            },
+          }),
+        }
+      );
+      if (!resp.ok) { console.warn(`${model} returned ${resp.status}`); continue; }
+      const data = await resp.json();
+      const raw: string = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) { console.warn(`${model}: no JSON in response`); continue; }
+      const p = JSON.parse(jsonMatch[0]);
+      return {
+        name: String(p.name || 'Unknown Destination'),
+        aliases: Array.isArray(p.aliases) ? p.aliases : [],
+        city: String(p.city || ''),
+        country: String(p.country || ''),
+        region: String(p.region || ''),
+        category: String(p.category || 'Scenic'),
+        destinationType: String(p.destinationType || 'other'),
+        description: String(p.description || ''),
+        confidence: Math.min(100, Math.max(0, Number(p.confidence) || 70)),
+        searchKeywords: Array.isArray(p.searchKeywords) ? p.searchKeywords : [],
+        alternativeGuesses: Array.isArray(p.alternativeGuesses) ? p.alternativeGuesses : [],
+      };
+    } catch (err) {
+      console.warn(`Gemini ${model} error:`, err);
+    }
+  }
+  return null;
+}
+
+// ── Score how well a DB entry matches the Gemini identification ────────────────
+function scoreMatch(entry: LandmarkEntry, g: GeminiIdentification): number {
+  const en = entry.name.toLowerCase();
+  const ec = entry.city.toLowerCase();
+  const eco = entry.country.toLowerCase();
+  const gn = g.name.toLowerCase();
+  const gc = g.city.toLowerCase();
+  const gco = g.country.toLowerCase();
+  const gr = g.region.toLowerCase();
+  const allAliases = g.aliases.map(a => a.toLowerCase());
+  const allKeywords = g.searchKeywords.map(k => k.toLowerCase());
+
+  let score = 0;
+
+  // Name matching (highest priority)
+  if (en === gn) score += 100;
+  else if (en.includes(gn) || gn.includes(en)) score += 70;
+  else if (allAliases.some(a => en.includes(a) || a.includes(en))) score += 55;
+  else if (allKeywords.some(k => en.includes(k))) score += 30;
+
+  // City matching
+  if (ec && gc && (ec === gc || ec.includes(gc) || gc.includes(ec))) score += 40;
+  else if (ec && gr && (ec.includes(gr) || gr.includes(ec))) score += 22;
+
+  // Country matching
+  if (eco && gco && (eco.includes(gco) || gco.includes(eco))) score += 10;
+
+  // Category + type matching
+  if (entry.category.toLowerCase() === g.category.toLowerCase()) score += 15;
+  if (entry.tags.some(t => t === g.destinationType)) score += 10;
+
+  // Alt guesses contribute
+  if (g.alternativeGuesses.some(a => en.includes(a.name.toLowerCase()) || ec.includes(a.city.toLowerCase()))) score += 20;
+
+  return score;
+}
+
+// ── Match Gemini result to DB (scored) or synthesize a rich entry ──────────────
+function matchOrSynthesizeLandmark(g: GeminiIdentification): { primary: LandmarkEntry; similar: LandmarkEntry[] } {
+  // Score every DB entry
+  const scored = landmarkDatabase
+    .map(e => ({ entry: e, score: scoreMatch(e, g) }))
+    .sort((a, b) => b.score - a.score);
+
+  const best = scored[0];
+
+  if (best.score >= 30) {
+    // Good match — use DB entry but inject AI description when confidence is high
+    const primary: LandmarkEntry = {
+      ...best.entry,
+      confidence: g.confidence,
+      description: g.confidence >= 85 && g.description ? g.description : best.entry.description,
+    };
+
+    // Build similar list from other scored entries then fill randomly
+    const similar: LandmarkEntry[] = scored
+      .slice(1)
+      .filter(s => s.score > 0)
+      .slice(0, 4)
+      .map(s => ({ ...s.entry, confidence: Math.min(90, Math.round(35 + s.score / 2)) }));
+
+    if (similar.length < 4) {
+      const pad = landmarkDatabase
+        .filter(e => e.id !== best.entry.id && !similar.find(s => s.id === e.id))
+        .sort(() => Math.random() - 0.5)
+        .slice(0, 4 - similar.length)
+        .map(e => ({ ...e, confidence: Math.round(35 + Math.random() * 20) }));
+      similar.push(...pad);
+    }
+
+    return { primary, similar };
+  }
+
+  // No DB match — synthesize a full entry from Gemini data
+  const inferContinent = (country: string): string => {
+    const c = country.toLowerCase();
+    if (['india','china','japan','thailand','indonesia','vietnam','cambodia','singapore','malaysia','maldives','nepal','sri lanka','bhutan','myanmar','laos'].some(x => c.includes(x))) return 'Asia';
+    if (['france','italy','spain','germany','united kingdom','uk','greece','turkey','norway','switzerland','netherlands','portugal','austria','croatia'].some(x => c.includes(x))) return 'Europe';
+    if (['usa','united states','canada','mexico'].some(x => c.includes(x))) return 'North America';
+    if (['brazil','argentina','peru','colombia','chile','ecuador'].some(x => c.includes(x))) return 'South America';
+    if (['australia','new zealand'].some(x => c.includes(x))) return 'Oceania';
+    if (['kenya','tanzania','south africa','zambia','zimbabwe','egypt','morocco'].some(x => c.includes(x))) return 'Africa';
+    return 'Unknown';
+  };
+
+  const isIndia = g.country.toLowerCase().includes('india');
+  const noVisa = ['india','maldives','nepal','bhutan'].some(x => g.country.toLowerCase().includes(x));
+
+  const synth: LandmarkEntry = {
+    id: `ai-${Date.now()}`,
+    name: g.name,
+    category: g.category,
+    subcategory: g.destinationType,
+    city: g.city,
+    country: g.country,
+    continent: inferContinent(g.country),
+    description: g.description || `${g.name} is a remarkable destination in ${g.city}, ${g.country}.`,
+    funFact: `${g.name} was identified by AI Vision with ${g.confidence}% confidence from your photo.`,
+    bestTime: 'Year-round',
+    avgBudget: isIndia ? 35000 : 90000,
+    flightFromDelhi: isIndia ? '1–3 hours' : 'Varies',
+    visaRequired: !noVisa,
+    visaType: noVisa ? undefined : 'Tourist Visa',
+    nearbyAttractions: g.alternativeGuesses.map(a => a.name).filter(Boolean),
+    suggestedHotels: [],
+    suggestedActivities: [],
+    travelTips: [
+      `Visit ${g.name} to experience its unique charm.`,
+      ...g.searchKeywords.slice(0, 2).map(k => `Known for: ${k}`),
+    ],
+    tags: [g.destinationType, g.category.toLowerCase(), g.country.toLowerCase().replace(/\s+/g, '-'), ...g.searchKeywords.slice(0, 3)].filter(Boolean),
+    similarDestinations: g.alternativeGuesses.map(a => a.name),
+    confidence: g.confidence,
+  };
+
+  // Similar: same category or country, randomly ordered
+  const similar = landmarkDatabase
+    .filter(e => e.category === g.category || e.country === g.country)
+    .sort(() => Math.random() - 0.5)
+    .slice(0, 4)
+    .map(e => ({ ...e, confidence: Math.round(38 + Math.random() * 25) }));
+
+  return { primary: synth, similar };
+}
 
 type SearchState = 'idle' | 'uploading' | 'analyzing' | 'results';
 
@@ -23,11 +412,15 @@ export function VisualSearch() {
 
   const [state, setState] = useState<SearchState>('idle');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageMime, setImageMime] = useState<string>('image/jpeg');
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [analysisSteps, setAnalysisSteps] = useState<AnalysisStep[]>([]);
   const [result, setResult] = useState<{ primary: LandmarkEntry; similar: LandmarkEntry[] } | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'hotels' | 'activities' | 'tips'>('overview');
   const [wishlist, setWishlist] = useState<Set<string>>(new Set());
+  const [geminiKey] = useState<string | null>(() => resolveGeminiKey());
+  const [aiMode, setAiMode] = useState(false); // true = Gemini identified the image
 
   // ── Image handlers ────────────────────────────────────────
   const processImage = useCallback((file: File) => {
@@ -40,14 +433,23 @@ export function VisualSearch() {
       return;
     }
 
+    const mime = file.type || 'image/jpeg';
+    setImageMime(mime);
+
     const reader = new FileReader();
-    reader.onload = (e) => {
-      setImagePreview(e.target?.result as string);
+    reader.onload = async (e) => {
+      const dataUrl = e.target?.result as string;
+      setImagePreview(dataUrl);
+      const rawBase64 = dataUrl.split(',')[1] ?? '';
+      // Compress to ≤1024px before AI upload (faster, more reliable for all backends)
+      const compressed = await compressImage(rawBase64);
+      setImageBase64(compressed);
       setState('uploading');
-      toast.success('Image uploaded! Starting analysis...');
-      setTimeout(() => startAnalysis(), 800);
+      toast.success('Image ready — AI identifying destination...');
+      setTimeout(() => startAnalysisWithBase64(compressed, 'image/jpeg'), 800);
     };
     reader.readAsDataURL(file);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -94,42 +496,92 @@ export function VisualSearch() {
     return () => document.removeEventListener('paste', handlePaste);
   }, [handlePaste]);
 
-  // Demo: use a sample image
+  // Demo: use a sample image (simulated, no real base64)
   const handleDemoSearch = () => {
     setImagePreview('https://images.unsplash.com/photo-1715615153018-68b21fc0d8c0?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=800');
+    setImageBase64(null);
     setState('uploading');
     toast.success('Demo image loaded! Starting analysis...');
-    setTimeout(() => startAnalysis(), 800);
+    setTimeout(() => startAnalysisWithBase64('', 'image/jpeg'), 800);
   };
 
-  // ── Analysis simulation ───────────────────────────────────
-  const startAnalysis = () => {
+  // ── Analysis: HuggingFace BLIP (free) → Gemini (backup) → simulation ──
+  const startAnalysisWithBase64 = async (base64: string, mime: string) => {
     setState('analyzing');
-    const recognition = simulateImageRecognition();
-    const steps = recognition.analysisSteps.map(text => ({ text, completed: false }));
+    const startedAt = Date.now();
+
+    const stepTexts = base64 ? [
+      'Compressing & uploading image...',
+      'Running AI Vision analysis...',
+      'Identifying landmarks & visual features...',
+      'Matching destination database...',
+      'Compiling travel recommendations...',
+    ] : simulateImageRecognition().analysisSteps;
+
+    const steps = stepTexts.map(text => ({ text, completed: false }));
     setAnalysisSteps(steps);
 
-    // Animate steps one by one
+    // Minimum display time so animation completes (steps × 700ms + 700ms buffer)
+    const minDisplayMs = (steps.length + 1) * 700;
+
+    // Animate steps progressively
     steps.forEach((_, idx) => {
       setTimeout(() => {
         setAnalysisSteps(prev => prev.map((s, i) => i <= idx ? { ...s, completed: true } : s));
-      }, (idx + 1) * 600);
+      }, (idx + 1) * 700);
     });
 
-    // Show results after all steps
+    // Run AI identification: HuggingFace BLIP (free, no CC) first, Gemini as backup
+    let aiResult: GeminiIdentification | null = null;
+    if (base64) {
+      // Primary: HuggingFace BLIP — truly free, no credit card needed
+      aiResult = await identifyImageWithHuggingFace(base64, mime);
+
+      // Secondary: Gemini Vision — if HF failed or returned low confidence
+      if ((!aiResult || aiResult.confidence < 45) && geminiKey) {
+        const geminiResult = await identifyImageWithGemini(base64, mime, geminiKey);
+        if (geminiResult && geminiResult.confidence >= (aiResult?.confidence ?? 0)) {
+          aiResult = geminiResult;
+        }
+      }
+    }
+
+    // Wait only the remaining time so total ≥ minDisplayMs (fixes timing bug)
+    const elapsed = Date.now() - startedAt;
+    const remaining = Math.max(0, minDisplayMs - elapsed);
+
     setTimeout(() => {
-      setResult({ primary: recognition.primary, similar: recognition.similar });
-      setState('results');
-      toast.success(`Identified: ${recognition.primary.name}!`, { description: `${recognition.primary.city}, ${recognition.primary.country}` });
-    }, (steps.length + 1) * 600);
+      if (aiResult) {
+        const matched = matchOrSynthesizeLandmark(aiResult);
+        setResult(matched);
+        setAiMode(true);
+        setState('results');
+        toast.success(`AI identified: ${aiResult.name}!`, {
+          description: `${aiResult.city ? aiResult.city + ', ' : ''}${aiResult.country} — ${aiResult.confidence}% confidence`,
+        });
+      } else {
+        const recognition = simulateImageRecognition();
+        setResult({ primary: recognition.primary, similar: recognition.similar });
+        setAiMode(false);
+        setState('results');
+        toast.success(`Identified: ${recognition.primary.name}!`, {
+          description: `${recognition.primary.city}, ${recognition.primary.country}`,
+        });
+      }
+    }, remaining);
   };
+
+  // Keep old no-arg version for demo (passes empty base64 to trigger fallback)
+  const startAnalysis = () => startAnalysisWithBase64('', 'image/jpeg');
 
   const resetSearch = () => {
     setState('idle');
     setImagePreview(null);
+    setImageBase64(null);
     setResult(null);
     setAnalysisSteps([]);
     setActiveTab('overview');
+    setAiMode(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -168,9 +620,12 @@ export function VisualSearch() {
         <h2 className="text-xl font-bold text-gray-900">Visual Search</h2>
         <span className="ml-2 px-2.5 py-0.5 bg-gradient-to-r from-indigo-500 to-purple-500 text-white text-[10px] rounded-full font-medium">AI-Powered</span>
       </div>
-      <p className="text-sm text-gray-500 mb-5">
+      <p className="text-sm text-gray-500 mb-2">
         Upload any travel photo — from social media, screenshots, or movie scenes — and our AI will identify the destination and build your trip.
       </p>
+      <div className="inline-flex items-center gap-1.5 text-[11px] bg-violet-50 text-violet-700 border border-violet-200 px-3 py-1 rounded-full mb-4">
+        <Sparkles className="w-3 h-3" /> AI Vision active — HuggingFace BLIP{geminiKey ? ' + Gemini' : ''} enabled
+      </div>
 
       {/* ── IDLE STATE: Upload Area ──────────────────────────── */}
       {state === 'idle' && (
@@ -345,9 +800,16 @@ export function VisualSearch() {
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/20" />
 
                 {/* Confidence badge */}
-                <div className="absolute top-4 left-4 px-3 py-1.5 bg-green-500 text-white text-xs font-bold rounded-full flex items-center gap-1.5 shadow-lg">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  {result.primary.confidence}% Match
+                <div className="absolute top-4 left-4 flex flex-col gap-1.5">
+                  <div className={`px-3 py-1.5 text-white text-xs font-bold rounded-full flex items-center gap-1.5 shadow-lg ${aiMode ? 'bg-violet-600' : 'bg-green-500'}`}>
+                    {aiMode ? <Sparkles className="w-3.5 h-3.5" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                    {result.primary.confidence}% {aiMode ? 'AI Match' : 'Match'}
+                  </div>
+                  {aiMode && (
+                    <div className="px-2.5 py-1 bg-black/50 backdrop-blur-sm text-white text-[10px] rounded-full flex items-center gap-1">
+                      <Sparkles className="w-3 h-3 text-violet-300" /> AI Vision
+                    </div>
+                  )}
                 </div>
 
                 <button

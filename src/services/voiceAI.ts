@@ -309,10 +309,54 @@ export function extractIntentFromText(
 export function getMissingFields(intent: ExtractedIntent): string[] {
   const m: string[] = [];
   if (!intent.destination) m.push('destination');
+  if (!intent.dates) m.push('dates');
   if (!intent.nights) m.push('duration');
-  if (!intent.adults) m.push('travelers');
+  if (intent.adults === undefined) m.push('travelers');
   if (!intent.budget) m.push('budget');
   return m;
+}
+
+// ─── Structured question flow helpers ─────────────────────────────────────────
+
+export const QUESTION_ORDER = ['destination', 'dates', 'duration', 'travelers', 'budget'] as const;
+export type QuestionField = typeof QUESTION_ORDER[number];
+
+export function getFirstMissingField(intent: ExtractedIntent): QuestionField | null {
+  if (!intent.destination) return 'destination';
+  if (!intent.dates) return 'dates';
+  if (!intent.nights) return 'duration';
+  if (intent.adults === undefined) return 'travelers';
+  if (!intent.budget) return 'budget';
+  return null;
+}
+
+export function getPreviousField(field: QuestionField): QuestionField | null {
+  const idx = QUESTION_ORDER.indexOf(field);
+  if (idx <= 0) return null;
+  return QUESTION_ORDER[idx - 1] as QuestionField;
+}
+
+export function clearField(intent: ExtractedIntent, field: QuestionField): ExtractedIntent {
+  const updated = { ...intent };
+  switch (field) {
+    case 'destination': delete updated.destination; break;
+    case 'dates':       delete updated.dates; delete updated.occasion; break;
+    case 'duration':    delete updated.nights; break;
+    case 'travelers':   delete updated.adults; delete updated.children; break;
+    case 'budget':      delete updated.budget; delete updated.budgetText; break;
+  }
+  return updated;
+}
+
+export function wasFieldFilled(field: QuestionField, intent: ExtractedIntent): boolean {
+  switch (field) {
+    case 'destination': return !!intent.destination;
+    case 'dates':       return !!intent.dates;
+    case 'duration':    return !!intent.nights;
+    case 'travelers':   return intent.adults !== undefined;
+    case 'budget':      return !!intent.budget;
+    default:            return true;
+  }
 }
 
 export function buildSearchQuery(intent: ExtractedIntent): string {
@@ -361,9 +405,7 @@ export function generateCopilotResponse(
   intent: ExtractedIntent,
   phase: ConversationPhase,
   _history: CopilotMessage[],
-  isAgentMode: boolean = false,
 ): CopilotResponse {
-  const missing = getMissingFields(intent);
   const searchQuery = buildSearchQuery(intent);
 
   // ── Results-page follow-ups ────────────────────────────────────────────────
@@ -445,16 +487,14 @@ export function generateCopilotResponse(
   }
 
   // ── Check if we have enough to navigate ───────────────────────────────────
-  const hasEnough = intent.destination && (intent.nights || intent.budget) && intent.adults;
+  const hasEnough = intent.destination && intent.dates && (intent.nights || intent.budget) && intent.adults !== undefined;
   if (hasEnough) {
     const summary = buildSummary(intent);
-    const text = isAgentMode
-      ? `Got it — pulling up packages for **${summary}**. Screen is updating now!`
-      : pick([
-          `Perfect! **${summary}**. Finding the best packages for you — check your screen!`,
-          `Sounds great! Searching for **${summary}**. Opening results now!`,
-          `On it! Packages for **${summary}** are loading on screen.`,
-        ]);
+    const text = pick([
+      `Perfect! **${summary}**. Finding the best packages for you — check your screen!`,
+      `Sounds great! Searching for **${summary}**. Opening results now!`,
+      `On it! Packages for **${summary}** are loading on screen.`,
+    ]);
     return {
       text,
       nextPhase: 'navigating',
@@ -465,112 +505,97 @@ export function generateCopilotResponse(
     };
   }
 
-  // ── Discovery: ask for missing info ───────────────────────────────────────
-  if (missing.includes('destination')) {
+  // ── Discovery: Phase 1 script (D01 → D02 → D03 → D04 → duration → D07) ───────
+  // D01 — Primary destination
+  if (!intent.destination) {
     return {
-      text: pick([
-        "Where does your client want to go? Any destination in mind — beach, hills, or international escape?\n\n💡 You can say things like *\"Goa\"*, *\"Manali\"*, *\"Dubai\"*, or even *\"somewhere in Rajasthan\"*.",
-        "Let's start with the destination! Domestic or international?\n\n💡 I understand English, Hindi, and most Indian regional languages — just speak naturally.",
-        "Which destination are they thinking of? Just name it — city, state, or country works.\n\n💡 Examples: *Goa, Kerala, Maldives, Bangkok, Shimla*",
-      ]),
+      text: "Do you have a destination in mind, or would you like some suggestions based on your interests?",
       nextPhase: 'discovery',
       shouldNavigate: false,
       searchQuery: '',
-      suggestedReplies: ['🏖️ Beach (Goa / Maldives)', '🏔️ Hills (Manali / Shimla)', '🌏 International (Dubai / Bali)', '🤔 Suggest something'],
     };
   }
 
-  if (missing.includes('duration')) {
-    const dest = intent.destination;
+  // D02 — Experience type (captured as vibe / preferences)
+  const hasExperience = intent.vibe || (intent.preferences && intent.preferences.length > 0);
+  if (!hasExperience) {
     return {
-      text: pick([
-        `**${dest}** is a great choice! How long is the trip?\n\n💡 You can say *"5 nights"*, *"1 week"*, or even *"long weekend"*. In Hindi: *"paanch raat"* or *"ek hafte ke liye"*.`,
-        `How many nights are they looking at for **${dest}**? A quick getaway or a longer stay?\n\n💡 Weekend = 2 nights, Long weekend = 3 nights`,
-        `Nice pick! How long — a weekend escape or something like 5–7 nights in **${dest}**?`,
-      ]),
+      text: `What kind of experience are you hoping for in ${intent.destination}? For example, are you looking for relaxation on a beach, cultural immersion, adventure activities, a food tour, or something else entirely?`,
       nextPhase: 'discovery',
       shouldNavigate: false,
       searchQuery: '',
-      suggestedReplies: ['🗓️ Weekend (2N)', '🗓️ Long weekend (3N)', '🗓️ 5 nights', '🗓️ 1 week'],
     };
   }
 
-  if (missing.includes('travelers')) {
+  // D03 — Group size and composition
+  if (intent.adults === undefined) {
     return {
-      text: pick([
-        `Got it — **${intent.nights} nights** in **${intent.destination}**. Who's going?\n\n💡 Say *"2 adults"*, *"family of 4"*, or *"solo trip"*. In Hindi: *"hum do log"*, *"parivar ke saath"*, or *"akele"*.`,
-        `Who's travelling? Just tell me the number of adults and if there are any kids.\n\n💡 Examples: *"couple"*, *"3 friends"*, *"me and my wife with 1 kid"*`,
-        `Is this a solo trip, couple, family, or group of friends? How many in total?`,
-      ]),
+      text: "How many people will be traveling, and could you tell me a bit about the group? For instance, are you traveling solo, as a couple, with family, or with friends?",
       nextPhase: 'discovery',
       shouldNavigate: false,
       searchQuery: '',
-      suggestedReplies: ['👤 Solo trip', '💑 Couple (2 adults)', '👨‍👩‍👧 Family with kids', '👫 Group of friends'],
     };
   }
 
-  if (missing.includes('budget')) {
-    const tl = travelerLabel(intent);
+  // D04 — Dates and flexibility
+  if (!intent.dates) {
     return {
-      text: pick([
-        `**${tl}** for **${intent.nights} nights** in **${intent.destination}**. What's the budget?\n\n💡 You can say *"50k"*, *"1.5 lakh"*, or just *"mid-range"* / *"luxury"*. In Hindi: *"pachaas hazar"* or *"ek lakh"*.`,
-        `Almost there! What's the overall budget — economy, mid-range, or luxury?\n\n💡 Rough ranges: Budget ≤₹40k | Mid-range ₹50–90k | Luxury ₹1L+`,
-        `Budget range? Even a rough number helps — I'll find the best packages within it.`,
-      ]),
+      text: "What dates are you considering for your trip, and is there any flexibility around those dates? Sometimes shifting by a day or two can open up better availability or pricing.",
       nextPhase: 'discovery',
       shouldNavigate: false,
       searchQuery: '',
-      suggestedReplies: ['💸 Budget (≤₹40k)', '💳 Mid-range (₹50–80k)', '💎 Luxury (₹1L+)', '🤷 Flexible on budget'],
+    };
+  }
+
+  // Duration (how long)
+  if (!intent.nights) {
+    return {
+      text: `How long are you planning to stay in ${intent.destination}?`,
+      nextPhase: 'discovery',
+      shouldNavigate: false,
+      searchQuery: '',
+    };
+  }
+
+  // D07 — Budget
+  if (!intent.budget) {
+    return {
+      text: "What's your overall budget range for this trip? Even a ballpark helps me tailor everything — from accommodation style to activity choices — so the plan fits comfortably within your expectations.",
+      nextPhase: 'discovery',
+      shouldNavigate: false,
+      searchQuery: '',
     };
   }
 
   return {
-    text: "Tell me a bit more and I'll find the perfect packages for you!",
+    text: "Tell me anything else about the trip and I'll refine the results for you.",
     nextPhase: 'discovery',
     shouldNavigate: false,
     searchQuery: '',
-    suggestedReplies: ['Start over', 'What can you do?'],
   };
 }
 
 // ─── Welcome / greeting messages ──────────────────────────────────────────────
 
-const GREETINGS = [
-  `Hi! I'm **TripBrain**, your AI travel copilot. 🌏\n\nI can help you:\n• Find packages for any destination\n• Compare flights, hotels & activities\n• Build client quotes instantly\n• Work in **English, Hindi & 8 regional languages**\n\nJust tell me where your client wants to go — I'll handle the rest!`,
-  `Hello! I'm your **AI Voice Copilot**. 🤖\n\nSpeak or type naturally — I understand English, Hindi, Bengali, Tamil, and more.\n\nTell me the trip details:\n📍 Destination • 🌙 Nights • 👥 Travelers • 💰 Budget\n\nAnd I'll find ready-to-sell packages in seconds!`,
-  `Hey there! Ready to plan an amazing trip? I'm **TripBrain**. 🌟\n\nI support **voice + text** input in English and Indian regional languages.\n\n*What's the destination, how long, who's going, and what's the budget?*\n\nYou can answer one at a time — I'll guide you through it!`,
-];
-
-const B2B_GREETING =
-  `**B2B Agent Mode active.** 📞\n\nI'm listening alongside your client call. Speak naturally — I'll silently extract preferences and update your screen with matching packages in real time.\n\n💡 Tips:\n• Just continue your normal conversation\n• I'll detect destination, dates, budget, and traveler count automatically\n• Your screen will update as I gather information`;
-
-export function getGreeting(isAgentMode: boolean = false): string {
-  return isAgentMode ? B2B_GREETING : pick(GREETINGS);
+export function getGreeting(_isAgentMode: boolean = false): string {
+  return "Welcome to TBO! I'm TripBrain, your AI travel assistant. I'm here to help you plan the perfect trip.";
 }
 
+export const FIRST_QUESTION =
+  "Where are you thinking of heading? Got a destination in mind, or shall I suggest some spots based on what you enjoy?";
+
 export function getCapabilitiesMessage(): string {
-  return `Here's what I can do:\n\n🔍 **Search** — Find packages by destination, dates, budget, and preferences\n🗣️ **Voice** — Speak in English, Hindi, or any Indian regional language\n⚖️ **Compare** — Side-by-side package comparison\n📋 **Quote** — Generate instant client quotes with markup\n📞 **B2B Mode** — Listen to client calls and pull up options silently\n\n*What would you like to start with?*`;
+  return "I'm here to help you plan a complete trip — from choosing a destination and experience style, to flights, accommodation, and booking. I'll guide you through it step by step. Just tell me where you'd like to go, or describe the kind of trip you have in mind and I'll offer some suggestions.";
 }
 
 // ─── Contextual suggested replies ─────────────────────────────────────────────
 
-export function getSuggestedReplies(phase: ConversationPhase, intent: ExtractedIntent): string[] {
+export function getSuggestedReplies(phase: ConversationPhase, _intent: ExtractedIntent): string[] {
   if (phase === 'results' || phase === 'navigating') {
     return ['Compare top 2', 'Best recommendation', 'Cheapest option', 'Build a quote'];
   }
-  if (!intent.destination) {
-    return ['Beach holiday (Goa / Maldives)', 'Hills (Manali / Shimla)', 'International (Dubai / Bali)', 'Suggest something'];
-  }
-  if (!intent.nights) {
-    return ['Weekend (2 nights)', 'Long weekend (3N)', '5 nights', '1 week'];
-  }
-  if (!intent.adults) {
-    return ['Solo trip', 'Couple (2 adults)', 'Family with kids', 'Group of friends'];
-  }
-  if (!intent.budget) {
-    return ['Budget (up to 40k)', 'Mid-range (50–80k)', 'Luxury (1L+)', 'Flexible on budget'];
-  }
-  return ['Search now', 'Add more preferences', 'Start over'];
+  // During discovery, questions are open-ended — no suggestion pills
+  return [];
 }
 
 // ─── Gemini AI integration ────────────────────────────────────────────────────
@@ -578,11 +603,11 @@ export function getSuggestedReplies(phase: ConversationPhase, intent: ExtractedI
 function buildIntentSummary(intent: ExtractedIntent): string {
   const parts: string[] = [];
   if (intent.destination) parts.push(`Destination: ${intent.destination}`);
+  if (intent.dates)       parts.push(`Check-in: ${intent.dates}`);
   if (intent.nights)      parts.push(`Duration: ${intent.nights} nights`);
   if (intent.adults)      parts.push(`Adults: ${intent.adults}`);
   if (intent.children)    parts.push(`Children: ${intent.children}`);
   if (intent.budget)      parts.push(`Budget: ₹${Math.round(intent.budget / 1000)}k`);
-  if (intent.dates)       parts.push(`When: ${intent.dates}`);
   if (intent.vibe)        parts.push(`Vibe: ${intent.vibe}`);
   return parts.length ? parts.join(' | ') : 'Nothing captured yet';
 }
@@ -612,36 +637,71 @@ export async function generateAIResponse(
   messages: CopilotMessage[],
   intent: ExtractedIntent,
   phase: ConversationPhase,
-  isAgentMode: boolean,
   apiKey: string,
 ): Promise<{ text: string; shouldSearch: boolean }> {
   const intentSummary = buildIntentSummary(intent);
   const hasEnough = !!(intent.destination && (intent.nights || intent.budget) && intent.adults);
 
-  const systemPrompt = `You are TripBrain, an AI travel copilot built into TBO TravelAgent — a B2B travel booking platform used by travel agents across India.
+  const systemPrompt = `You are TripBrain, the AI travel copilot for TBO.com. You help travellers plan complete trips through a warm, natural conversation.
 
-PERSONALITY: Warm, natural, and concise. You improvise on every reply — never sound scripted or robotic. Be like a knowledgeable friend who happens to know travel inside out.
+PERSONALITY: Warm, conversational, never robotic. Speak like a knowledgeable travel consultant.
 
-YOUR MISSION: Through natural conversation, help the agent gather: destination, trip duration (nights), number of adults and children, and budget in INR. Then trigger a package search.
+CONVERSATION SCRIPT — follow this question flow exactly, one question per turn:
 
-LANGUAGE RULE: Always respond in the same language and register the user is using. If they write in Hindi or Hinglish, respond the same way.
+PHASE 1 — DESTINATION & INTERESTS
+D01: "Do you have a destination in mind, or would you like some suggestions based on your interests?"
+  → If destination given: "That's a wonderful choice! Have you visited before, or will this be your first time?"
+D02: "What kind of experience are you hoping for on this trip? For example, are you looking for relaxation on a beach, cultural immersion, adventure activities, a food and wine tour, or something else entirely?"
+  → Follow-up: "If you could describe your perfect day on this trip from morning to night, what would it look like?"
+D03: "How many people will be traveling, and could you tell me a bit about the group? For instance, are you traveling solo, as a couple, with family, or with friends?"
+  → Follow-up if family: "Are there any children or elderly members in the group whose needs we should plan around?"
+D04: "What dates are you considering for your trip, and is there any flexibility around those dates? Sometimes shifting by a day or two can open up better availability or pricing."
+  → Follow-up: "Is this trip tied to a specific event, holiday, or school break?"
+D05: "Are there specific neighborhoods, landmarks, or attractions you'd like to explore? I can also suggest popular local gems that most visitors love."
+D06: "How important is local food and dining in your trip? Would you like recommendations for markets, street food, fine dining, cooking classes, or food tours?"
+D07: "What's your overall budget range for this trip? Even a ballpark helps me tailor everything — from accommodation style to activity choices — so the plan fits comfortably within your expectations."
+  → Follow-up: "Would you like me to prioritize spending on any particular area — for example, splurge on the hotel but keep activities budget-friendly, or vice versa?"
 
-RESPONSE FORMAT — strictly follow these:
+PHASE 2 — FLIGHTS (ask after search results are shown)
+F01: "Which city or airport will you be departing from, and do you have a preferred arrival airport at your destination?"
+F02: "Do you have a preference for flight times? Would you like an early morning departure to maximize your first day, or is a later departure more comfortable?"
+F03: "Which cabin class would you prefer — economy, premium economy, business, or first class? And do you have any airline preferences or loyalty programs to factor in?"
+F04: "Will you need checked baggage, or will you be traveling light with carry-on only?"
+F05: "Once you arrive, how would you like to get around? Options include rental cars, private transfers, ride-sharing, or public transit."
+
+PHASE 3 — ACCOMMODATION (ask after flights are sorted)
+A01: "What type of accommodation appeals to you most — a full-service hotel, a boutique property, a vacation rental, a resort?"
+A02: "How many rooms do you need, and what bed configuration works best — king, queen, twin, or connecting rooms?"
+A03: "Is location a top priority? Would you like to be near the beach, city centre, airport, or a particular neighbourhood?"
+A04: "On a scale from practical and affordable to luxurious and indulgent, where does your ideal accommodation fall? And is there a nightly budget range you'd like me to work within?"
+A05: "What time do you expect to arrive at the hotel, and is an early check-in important to you?"
+A06: "Are there any special requests or occasions I should let the hotel know about — a birthday, anniversary, honeymoon, or room preferences like a high floor or a view?"
+
+PHASE 4 — FINALISATION
+B01: "I've put together your complete itinerary. Let me walk you through it day by day — please let me know if anything needs adjusting."
+B02: "Let me confirm the key details: traveller names as on passports, dates of birth, and any loyalty or frequent flyer numbers."
+B03: "Here's a summary of the total cost, broken down by flights, accommodation, transfers, and activities. Would you like to review each component?"
+B04: "Let me walk you through the cancellation and modification policies. Would you prefer flexible options or non-refundable rates for a lower price?"
+B05: "How would you like to handle payment — a single transaction, or split payments across bookings?"
+B06: "Everything is confirmed! I'll send your complete itinerary and all booking references to your email. What's the best email address?"
+B07: "Is there anything else I can help with — restaurant reservations, event tickets, packing suggestions, or any last questions about your destination?"
+B08: "Thank you for booking with TBO! We're excited about your trip. If anything changes or you think of something later, don't hesitate to reach back out. Have an amazing journey!"
+
+LANGUAGE RULE: Always respond in the same language the user is using.
+
+RESPONSE FORMAT:
 - Maximum 2 short sentences. This is a voice-first interface.
-- Plain text only. No bullet points, no markdown asterisks, no emojis in your response.
-- Sound completely human. Vary your phrasing every time.
-- Always acknowledge what the user just said before asking the next question.
-- Never ask more than one question at a time.
+- Plain text only. No bullet points, no markdown, no emojis.
+- Always acknowledge what the user said before asking the next question.
+- Never ask more than one question per turn.
+- Ask open-ended questions only — never embed choices or options inside the question.
 
-SEARCH TRIGGER: When you have all of destination + (nights or budget) + adult count, end your response with the exact token [SEARCH] after a natural confirmation sentence.
-Example: "Great, Goa for 5 nights with 4 friends and a 40k budget — let me pull those up right now! [SEARCH]"
+SEARCH TRIGGER: When you have destination + dates + adult count, end your response with the exact token [SEARCH].
+Example: "Goa in July for 5 nights with 2 adults and a 60k budget — pulling those up now! [SEARCH]"
 
-ON RESULTS PAGE: Help compare, recommend, or guide toward booking. Keep it to 1–2 sentences.
-${isAgentMode ? '\nB2B MODE: The agent is on a call with a client. Be extra concise and efficient.' : ''}
-
-Currently captured info: ${intentSummary}
-Conversation phase: ${phase}
-Ready to search: ${hasEnough ? 'YES — trigger [SEARCH] now if not done already' : 'NO — still gathering info'}`;
+Currently captured: ${intentSummary}
+Phase: ${phase}
+Ready to search: ${hasEnough ? 'YES — include [SEARCH] if not already triggered' : 'NO — still gathering Phase 1 info'}`;
 
   const contents = buildGeminiHistory(messages);
   if (!contents.length) return { text: '', shouldSearch: false };
@@ -672,6 +732,6 @@ export function resolveGeminiKey(): string | null {
   // Vite env variable (set VITE_GEMINI_API_KEY in .env)
   const envKey = (import.meta as any).env?.VITE_GEMINI_API_KEY as string | undefined;
   if (envKey && envKey.length > 10) return envKey;
-  // User-supplied key saved in browser
-  return localStorage.getItem('tripbrain_gemini_key') || null;
+  // Hardcoded Gemini API key — always active
+  return 'AIzaSyArUkaNW8ddJUqXD_5Rjec4krPOK_UIzrY';
 }

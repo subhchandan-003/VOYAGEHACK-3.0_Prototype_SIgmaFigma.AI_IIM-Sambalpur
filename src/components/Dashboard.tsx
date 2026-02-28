@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router';
-import { TrendingUp, Search, IndianRupee, Mic, MicOff, Sparkles, MapPin, Calendar, Users, Package, Globe, Shield, ArrowRight } from 'lucide-react';
+import { TrendingUp, Search, IndianRupee, Mic, MicOff, Sparkles, MapPin, Calendar, Users, Package, Globe, Shield, ArrowRight, ChevronDown, AlertCircle, X } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { AdvancedSearch } from './AdvancedSearch';
 import { PopularPackages } from './PopularPackages';
@@ -10,6 +10,7 @@ import { VisualSearch } from './VisualSearch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { tripApi, searchApi } from '../services/api';
+import { SUPPORTED_LANGUAGES, extractIntentFromText, getMissingFields } from '../services/voiceAI';
 
 const DEMO_PHRASES = [
   'Goa, 5 nights, 2 adults and 1 child, budget 60 thousand, beach resort, mid December',
@@ -27,10 +28,26 @@ export function Dashboard() {
   const [searchMode, setSearchMode] = React.useState<'simple' | 'advanced'>('simple');
   const [isListening, setIsListening] = React.useState(false);
   const [speechMode, setSpeechMode] = React.useState<'real' | 'demo' | null>(null);
+  const [voiceLang, setVoiceLang] = React.useState('en-IN');
+  const [showLangMenu, setShowLangMenu] = React.useState(false);
+  const [missingFields, setMissingFields] = React.useState<string[]>([]);
+  const [showMissingPopup, setShowMissingPopup] = React.useState(false);
+
   const recognitionRef = React.useRef<any>(null);
   const baseQueryRef = React.useRef('');
   const demoTimerRef = React.useRef<any>(null);
   const demoAbortRef = React.useRef(false);
+  const langMenuRef = React.useRef<HTMLDivElement>(null);
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+
+  // Friendly labels and icons for each missing field
+  const FIELD_META: Record<string, { label: string; icon: React.ReactNode }> = {
+    destination: { label: 'Destination',             icon: <MapPin className="w-3 h-3" /> },
+    dates:       { label: 'Check-in / Check-out Dates', icon: <Calendar className="w-3 h-3" /> },
+    duration:    { label: 'No. of Nights',            icon: <Calendar className="w-3 h-3" /> },
+    travelers:   { label: 'No. of Travelers',         icon: <Users className="w-3 h-3" /> },
+    budget:      { label: 'Budget',                   icon: <IndianRupee className="w-3 h-3" /> },
+  };
 
   // Fetch dashboard stats from Express API (falls back to defaults)
   const [quickStats, setQuickStats] = React.useState([
@@ -105,6 +122,22 @@ export function Dashboard() {
     };
   }, []);
 
+  // Update recognition language when user changes it
+  React.useEffect(() => {
+    if (recognitionRef.current) recognitionRef.current.lang = voiceLang;
+  }, [voiceLang]);
+
+  // Close language menu on outside click
+  React.useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (langMenuRef.current && !langMenuRef.current.contains(e.target as Node)) {
+        setShowLangMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
   const startDemoListening = () => {
     const phrase = DEMO_PHRASES[Math.floor(Math.random() * DEMO_PHRASES.length)];
     setIsListening(true);
@@ -171,8 +204,41 @@ export function Dashboard() {
     { text: 'Manali, weekend trip, couple, adventure activities, budget ₹40k', label: 'Manali Adventure', emoji: '🏔️' },
   ];
 
-  const handleSearch = async () => {
+  const quickDestinations = [
+    { label: 'Goa', emoji: '🏖️', query: 'Goa, 5 nights, 2 adults, beach resort, budget ₹60k' },
+    { label: 'Manali', emoji: '🏔️', query: 'Manali, 4 nights, 2 adults, snow & adventure, budget ₹40k' },
+    { label: 'Kerala', emoji: '🌿', query: 'Kerala, 6 nights, couple, backwaters & houseboat, budget ₹80k' },
+    { label: 'Rajasthan', emoji: '🏰', query: 'Rajasthan, 7 nights, family of 4, heritage & culture, budget ₹1.2L' },
+    { label: 'Leh–Ladakh', emoji: '🏕️', query: 'Leh, 6 nights, 2 adults, mountains & monasteries, budget ₹90k' },
+    { label: 'Udaipur', emoji: '🦢', query: 'Udaipur, 4 nights, couple, romantic lakes & palaces, budget ₹70k' },
+    { label: 'Rishikesh', emoji: '🕉️', query: 'Rishikesh, 3 nights, 2 adults, adventure & yoga, budget ₹30k' },
+    { label: 'Darjeeling', emoji: '🍵', query: 'Darjeeling, 4 nights, 2 adults, tea gardens & hills, budget ₹45k' },
+    { label: 'Andaman', emoji: '🐠', query: 'Andaman, 5 nights, couple, snorkelling & beaches, budget ₹80k' },
+    { label: 'Varanasi', emoji: '🪔', query: 'Varanasi, 3 nights, 2 adults, spiritual & cultural, budget ₹35k' },
+    { label: 'Dubai', emoji: '✈️', query: 'Dubai, 4 nights, family of 4, luxury shopping, budget ₹1.5L' },
+    { label: 'Bali', emoji: '🌺', query: 'Bali, 7 nights, couple, temples & beaches, budget ₹1.2L' },
+    { label: 'Maldives', emoji: '🐚', query: 'Maldives, 5 nights, couple, luxury overwater villa, budget ₹2L' },
+    { label: 'Thailand', emoji: '🐘', query: 'Thailand, 6 nights, family of 4, culture & beaches, budget ₹1.3L' },
+    { label: 'Singapore', emoji: '🦁', query: 'Singapore, 4 nights, family of 4, theme parks & food, budget ₹1.4L' },
+    { label: 'Paris', emoji: '🗼', query: 'Paris, 5 nights, couple, romantic Europe trip, budget ₹2.5L' },
+    { label: 'Japan', emoji: '🗾', query: 'Japan, 7 nights, 2 adults, culture & cuisine, budget ₹3L' },
+    { label: 'Switzerland', emoji: '🏔️', query: 'Switzerland, 6 nights, couple, mountains & lakes, budget ₹3.5L' },
+  ];
+
+  const handleSearch = async (force = false) => {
     if (!query.trim()) return;
+
+    if (!force) {
+      const intent = extractIntentFromText(query);
+      const missing = getMissingFields(intent);
+      if (missing.length > 0) {
+        setMissingFields(missing);
+        setShowMissingPopup(true);
+        return;
+      }
+    }
+
+    setShowMissingPopup(false);
     setIsProcessing(true);
     await new Promise(resolve => setTimeout(resolve, 1500));
     navigate('/packages', { state: { query } });
@@ -258,8 +324,9 @@ export function Dashboard() {
                   </label>
                   <div className="relative">
                     <textarea
+                      ref={textareaRef}
                       value={query}
-                      onChange={(e) => setQuery(e.target.value)}
+                      onChange={(e) => { setQuery(e.target.value); if (showMissingPopup) setShowMissingPopup(false); }}
                       placeholder="Example: Goa, 5 nights, 2 adults + 1 child, budget ₹60k, beach vibe, mid-December, flexible dates"
                       className={`w-full h-32 px-3 sm:px-4 py-2 sm:py-3 border rounded-xl resize-none focus:outline-none focus:ring-2 focus:border-transparent text-sm sm:text-base transition-colors ${
                         isListening
@@ -291,10 +358,39 @@ export function Dashboard() {
                   <span className="lg:hidden ml-1">AI extracts key details</span>
                 </div>
                 <div className="flex items-center gap-2 w-full sm:w-auto">
+                  {/* Language selector dropdown */}
+                  <div className="relative flex-shrink-0" ref={langMenuRef}>
+                    <button
+                      type="button"
+                      onClick={() => setShowLangMenu(v => !v)}
+                      title="Voice language"
+                      className="flex items-center gap-1 px-2.5 py-2.5 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-700 text-xs font-semibold transition-all"
+                    >
+                      <Globe className="w-3.5 h-3.5 text-blue-500" />
+                      <span>{SUPPORTED_LANGUAGES.find(l => l.code === voiceLang)?.label ?? 'EN'}</span>
+                      <ChevronDown className="w-3 h-3 text-gray-400" />
+                    </button>
+                    {showLangMenu && (
+                      <div className="absolute bottom-full mb-1.5 left-0 z-50 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden min-w-[130px]">
+                        {SUPPORTED_LANGUAGES.map(lang => (
+                          <button
+                            key={lang.code}
+                            type="button"
+                            onClick={() => { setVoiceLang(lang.code); setShowLangMenu(false); toast(`Voice: ${lang.name}`, { duration: 1200 }); }}
+                            className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-blue-50 transition-colors ${voiceLang === lang.code ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-gray-700'}`}
+                          >
+                            <span className="font-bold w-6 text-center">{lang.label}</span>
+                            <span>{lang.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                   <button
                     onClick={toggleListening}
                     type="button"
-                    title={isListening ? 'Stop listening' : 'Start voice input'}
+                    title={isListening ? 'Stop listening' : `Start voice input in ${SUPPORTED_LANGUAGES.find(l => l.code === voiceLang)?.name ?? 'English'}`}
                     className={`relative px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl transition-all flex-shrink-0 flex items-center gap-2 text-sm sm:text-base ${
                       isListening
                         ? 'bg-red-500 text-white shadow-lg shadow-red-200'
@@ -308,7 +404,7 @@ export function Dashboard() {
                     <span className="relative z-10 hidden sm:inline">{isListening ? 'Stop' : 'Speak'}</span>
                   </button>
                   <button
-                    onClick={handleSearch}
+                    onClick={() => handleSearch()}
                     disabled={!query.trim() || isProcessing}
                     className="flex-1 sm:flex-none px-5 sm:px-6 py-2.5 sm:py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:from-blue-700 hover:to-blue-800 disabled:from-gray-300 disabled:to-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all text-sm sm:text-base shadow-md shadow-blue-200 disabled:shadow-none"
                   >
@@ -328,9 +424,100 @@ export function Dashboard() {
               </div>
             </div>
 
+            {/* ── Missing Details Gentle Nudge ─────────────────────────────── */}
+            <div
+              className={`transition-all duration-300 ease-out overflow-hidden ${
+                showMissingPopup
+                  ? 'max-h-72 opacity-100 mb-5'
+                  : 'max-h-0 opacity-0 mb-0 pointer-events-none'
+              }`}
+            >
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 sm:p-5 shadow-sm">
+                <div className="flex items-start gap-3">
+                  {/* Icon badge */}
+                  <div className="w-8 h-8 bg-amber-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <AlertCircle className="w-4 h-4 text-amber-600" />
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    {/* Header row */}
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <p className="text-sm font-semibold text-amber-900 leading-snug">
+                        A few details would help us find better packages
+                      </p>
+                      <button
+                        onClick={() => setShowMissingPopup(false)}
+                        className="flex-shrink-0 p-0.5 text-amber-400 hover:text-amber-600 rounded transition-colors"
+                        aria-label="Dismiss"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Subtitle */}
+                    <p className="text-xs text-amber-700 mb-3 leading-relaxed">
+                      Your search is missing:{' '}
+                      {missingFields.map((f, i) => (
+                        <span key={f}>
+                          {i > 0 && ', '}
+                          <strong>{FIELD_META[f]?.label ?? f}</strong>
+                        </span>
+                      ))}
+                      . Adding these lets our AI match the perfect package for your client.
+                    </p>
+
+                    {/* Missing field chips */}
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {missingFields.map(field => (
+                        <span
+                          key={field}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-amber-300 text-amber-800 rounded-full text-xs font-medium shadow-sm"
+                        >
+                          {FIELD_META[field]?.icon}
+                          {FIELD_META[field]?.label ?? field}
+                        </span>
+                      ))}
+                    </div>
+
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => { setShowMissingPopup(false); textareaRef.current?.focus(); }}
+                        className="px-3.5 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-semibold hover:bg-amber-700 active:scale-95 transition-all"
+                      >
+                        Add details
+                      </button>
+                      <button
+                        onClick={() => handleSearch(true)}
+                        className="px-3.5 py-1.5 bg-white border border-amber-300 text-amber-700 rounded-lg text-xs font-medium hover:bg-amber-50 active:scale-95 transition-all"
+                      >
+                        Continue anyway
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Destination Picker */}
+            <div className="mb-6">
+              <h3 className="text-sm text-gray-500 mb-3 px-1 font-medium">Popular destinations — click to search:</h3>
+              <div className="flex flex-wrap gap-2">
+                {quickDestinations.map((dest) => (
+                  <button
+                    key={dest.label}
+                    onClick={() => { setQuery(dest.query); navigate('/packages', { state: { query: dest.query } }); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-xs font-medium text-gray-700 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-all shadow-sm whitespace-nowrap"
+                  >
+                    <span>{dest.emoji}</span> {dest.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Example Searches */}
             <div className="mb-8">
-              <h3 className="text-sm text-gray-500 mb-3 px-1">Try these examples:</h3>
+              <h3 className="text-sm text-gray-500 mb-3 px-1">Or try these full examples:</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 {exampleSearches.map((example, index) => (
                   <button

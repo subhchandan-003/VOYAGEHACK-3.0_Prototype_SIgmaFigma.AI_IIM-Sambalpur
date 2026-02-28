@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from 'react-router';
-import { Plane, Package, FileText, Map, Sparkles, Menu, X, Bot } from 'lucide-react';
+import { Plane, Map, Menu, X, Bot } from 'lucide-react';
 import { useState } from 'react';
 import { VoiceCopilot } from './VoiceCopilot';
 
@@ -19,15 +19,35 @@ export function Layout() {
       <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <div className="flex items-center gap-2 sm:gap-3">
-              <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gradient-to-br from-blue-600 to-blue-700 rounded-lg flex items-center justify-center">
-                <Sparkles className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
-              </div>
+            <Link to="/" className="flex items-center gap-2 sm:gap-3 group">
+              {/* tbo.com Globe Logo */}
+              <svg viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-9 h-9 sm:w-11 sm:h-11 flex-shrink-0">
+                {/* Outer dashed orbit ring */}
+                <circle cx="22" cy="22" r="20" stroke="#1e3a8a" strokeWidth="1.6" strokeDasharray="3.8 2.6" fill="none"/>
+                {/* Arrow head top-right */}
+                <path d="M35.5 8.5 L39.5 7 L37.5 11.5" fill="#1e3a8a"/>
+                {/* Arrow head bottom-left */}
+                <path d="M8.5 35.5 L4.5 37 L6.5 32.5" fill="#1e3a8a"/>
+                {/* Globe circle */}
+                <circle cx="22" cy="22" r="12.5" stroke="#1e3a8a" strokeWidth="1.6" fill="none"/>
+                {/* Equator */}
+                <line x1="9.5" y1="22" x2="34.5" y2="22" stroke="#1e3a8a" strokeWidth="1" opacity="0.65"/>
+                {/* Prime meridian */}
+                <line x1="22" y1="9.5" x2="22" y2="34.5" stroke="#1e3a8a" strokeWidth="1" opacity="0.65"/>
+                {/* Upper latitude arc */}
+                <path d="M11 16.5 Q22 12.5 33 16.5" stroke="#1e3a8a" strokeWidth="1" fill="none" opacity="0.65"/>
+                {/* Lower latitude arc */}
+                <path d="M11 27.5 Q22 31.5 33 27.5" stroke="#1e3a8a" strokeWidth="1" fill="none" opacity="0.65"/>
+                {/* Left longitude arc */}
+                <path d="M22 9.5 Q15.5 15.5 15.5 22 Q15.5 28.5 22 34.5" stroke="#1e3a8a" strokeWidth="1" fill="none" opacity="0.65"/>
+                {/* Right longitude arc */}
+                <path d="M22 9.5 Q28.5 15.5 28.5 22 Q28.5 28.5 22 34.5" stroke="#1e3a8a" strokeWidth="1" fill="none" opacity="0.65"/>
+              </svg>
               <div>
-                <h1 className="font-bold text-gray-900 text-sm sm:text-base">TBO TravelAgent™</h1>
-                <p className="text-xs text-gray-500 hidden sm:block">AI-Powered Booking Assistant</p>
+                <div className="font-extrabold text-[#1e3a8a] text-base sm:text-lg leading-tight tracking-tight">tbo.com</div>
+                <div className="text-[9px] sm:text-[10px] text-gray-400 font-semibold tracking-[0.18em] uppercase hidden sm:block">Travel Simplified</div>
               </div>
-            </div>
+            </Link>
 
             {/* Desktop Navigation */}
             <nav className="hidden md:flex items-center gap-1">
