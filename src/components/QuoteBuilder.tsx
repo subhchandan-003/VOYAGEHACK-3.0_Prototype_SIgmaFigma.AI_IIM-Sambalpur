@@ -1,16 +1,21 @@
-import { useParams, useNavigate } from 'react-router';
+import { useParams, useNavigate, useLocation } from 'react-router';
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Download, Send, Plus, Minus, FileText, Check } from 'lucide-react';
 import { generateMockPackages } from '../utils/mockData';
 import { saveTrip, generateId } from '../utils/storage';
 import { Trip } from '../types';
 import { packageApi, quoteApi, tripApi } from '../services/api';
+import { parseQuery } from '../utils/packageGenerator';
 
 export function QuoteBuilder() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [pkg, setPkg] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  const queryStr: string = (location.state as any)?.query ?? '';
+  const parsed = parseQuery(queryStr);
 
   const [markup, setMarkup] = useState(10);
   const [clientEmail, setClientEmail] = useState('');
@@ -58,14 +63,18 @@ export function QuoteBuilder() {
 
   const handleSendQuote = async () => {
     // Save to MongoDB via Express API
+    const destination = pkg.outboundFlight?.arrival || parsed.destination;
+    const dates = parsed.dates || `${pkg.hotel?.nights ?? parsed.nights} nights`;
+    const travelers = `${parsed.adults} Adult${parsed.adults !== 1 ? 's' : ''}`;
+
     const quoteData = {
       clientName: clientName || clientEmail.split('@')[0],
       clientEmail,
       packageId: pkg._id || pkg.id,
       packageSnapshot: pkg,
-      destination: 'Goa',
-      dates: 'Dec 15-20, 2025',
-      travelers: '2 Adults + 1 Child',
+      destination,
+      dates,
+      travelers,
       totalPrice: subtotal,
       markup: markupAmount,
       finalPrice: Math.round(finalTotal),
@@ -77,8 +86,8 @@ export function QuoteBuilder() {
     const tripData = {
       clientName: quoteData.clientName,
       clientEmail,
-      destination: 'Goa',
-      dates: 'Dec 15-20, 2025',
+      destination,
+      dates,
       status: 'pending',
       packageId: pkg._id || pkg.id,
       packageSnapshot: pkg,
@@ -92,8 +101,8 @@ export function QuoteBuilder() {
     const newTrip: Trip = {
       id: generateId('trip'),
       clientName: clientName || clientEmail.split('@')[0],
-      destination: 'Goa',
-      dates: 'Dec 15-20, 2025',
+      destination,
+      dates,
       status: 'pending',
       package: pkg,
       pnr: generateId('PNR').toUpperCase(),
@@ -155,7 +164,7 @@ export function QuoteBuilder() {
                 <div className="flex justify-between text-xs sm:text-sm">
                   <div>
                     <div className="text-gray-900">{pkg.hotel.name}</div>
-                    <div className="text-xs text-gray-500">5 nights • {pkg.hotel.area}</div>
+                    <div className="text-xs text-gray-500">{parsed.nights} nights • {pkg.hotel.area}</div>
                   </div>
                   <span className="text-gray-900">₹{pkg.priceBreakdown.hotel.toLocaleString()}</span>
                 </div>

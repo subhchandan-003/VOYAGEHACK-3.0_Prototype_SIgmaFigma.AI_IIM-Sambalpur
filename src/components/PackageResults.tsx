@@ -394,13 +394,13 @@ export function PackageResults() {
             {/* Actions */}
             <div className="p-4 sm:p-6 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 rounded-b-xl">
               <button
-                onClick={() => navigate(`/package/${pkg.id}`)}
+                onClick={() => navigate(`/package/${pkg.id}`, { state: { query } })}
                 className="px-4 py-2 text-sm border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition-colors"
               >
                 Customize Package
               </button>
               <button
-                onClick={() => navigate(`/quote/${pkg.id}`)}
+                onClick={() => navigate(`/quote/${pkg.id}`, { state: { query } })}
                 className="px-4 sm:px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 transition-colors"
               >
                 Generate Quote

@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router';
+import { useParams, useNavigate, useLocation } from 'react-router';
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Lock, Unlock, RefreshCw, ChevronRight } from 'lucide-react';
 import { generateMockPackages } from '../utils/mockData';
@@ -7,6 +7,8 @@ import { packageApi } from '../services/api';
 export function PackageDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const query: string = (location.state as any)?.query ?? '';
   const [pkg, setPkg] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
@@ -230,7 +232,7 @@ export function PackageDetail() {
           </div>
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
             <button onClick={() => navigate('/packages')} className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-sm">Cancel</button>
-            <button onClick={() => navigate(`/quote/${pkg.id}`)} className="px-4 sm:px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 text-sm">
+            <button onClick={() => navigate(`/quote/${pkg.id}`, { state: { query } })} className="px-4 sm:px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 text-sm">
               Generate Quote
               <ChevronRight className="w-4 h-4" />
             </button>
