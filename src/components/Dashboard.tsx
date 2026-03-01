@@ -11,12 +11,32 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { tripApi, searchApi } from '../services/api';
 import { SUPPORTED_LANGUAGES, extractIntentFromText, getMissingFields } from '../services/voiceAI';
+import { demoDestinations, getDestEmoji } from '../data/demoDataset';
+
+// ── Dataset-driven region groups (module-level, derived from static constant) ─
+const REGION_GROUPS: { label: string; dests: typeof demoDestinations }[] = (() => {
+  const g: Record<string, typeof demoDestinations> = {
+    'India': [],
+    'SE & NE Asia': [],
+    'Middle East': [],
+    'Europe': [],
+    'Island Escapes': [],
+  };
+  for (const d of demoDestinations) {
+    if (d.country === 'India') g['India'].push(d);
+    else if (['Thailand', 'Singapore', 'Indonesia', 'Malaysia', 'Japan', 'South Korea'].includes(d.country)) g['SE & NE Asia'].push(d);
+    else if (d.country === 'UAE') g['Middle East'].push(d);
+    else if (['France', 'Switzerland', 'Italy', 'Spain', 'Netherlands', 'Hungary', 'Czech Republic', 'Austria', 'Turkey', 'Georgia', 'Azerbaijan'].includes(d.country)) g['Europe'].push(d);
+    else g['Island Escapes'].push(d);
+  }
+  return Object.entries(g).map(([label, dests]) => ({ label, dests }));
+})();
 
 const DEMO_PHRASES = [
-  'Goa, 5 nights, 2 adults and 1 child, budget 60 thousand, beach resort, mid December',
-  'Dubai luxury trip, 4 nights, couple, shopping and theme parks, budget 1.5 lakh',
-  'Kerala backwaters, honeymoon, 6 nights, houseboat stay, budget 80 thousand',
-  'Manali adventure trip, 3 nights, family of 4, snow activities, budget 40 thousand',
+  'Goa, check-in [Date], check-out [Date], 2 adults + 1 child, by flight, beach resort, all meals, budget 60 thousand',
+  'Dubai, check-in [Date], check-out [Date], 2 adults, by flight, deluxe room, breakfast, luxury shopping, budget 1.5 lakh',
+  'Alleppey, check-in [Date], check-out [Date], couple, by train, houseboat stay, honeymoon, budget 80 thousand',
+  'Manali, check-in [Date], check-out [Date], family of 4, by flight, snow activities, budget 40 thousand',
 ];
 
 const HERO_IMAGE = 'https://images.unsplash.com/photo-1751699123722-0ec88b5b90dc?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHx0cm9waWNhbCUyMHRyYXZlbCUyMGFkdmVudHVyZSUyMGFlcmlhbCUyMG9jZWFufGVufDF8fHx8MTc3MjAyMDQzM3ww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral';
@@ -199,31 +219,11 @@ export function Dashboard() {
   };
 
   const exampleSearches = [
-    { text: 'Goa, 5 nights, 2 adults + 1 child, budget ₹60k, beach, mid-Dec, flexible dates', label: 'Goa Beach Trip', emoji: '🏖️' },
-    { text: 'Dubai, 4 nights, family of 4, luxury, ₹1.5L budget, shopping & theme parks', label: 'Dubai Family', emoji: '🏙️' },
-    { text: 'Manali, weekend trip, couple, adventure activities, budget ₹40k', label: 'Manali Adventure', emoji: '🏔️' },
+    { text: 'Goa, check-in [Date], check-out [Date], 2 adults + 1 child, by flight, beach resort, all meals, budget ₹60k', label: 'Goa Beach Trip', emoji: '🏖️' },
+    { text: 'Dubai, check-in [Date], check-out [Date], 2 adults, by flight, deluxe room, breakfast, shopping & theme parks, budget ₹1.5L', label: 'Dubai Family', emoji: '🏙️' },
+    { text: 'Manali, check-in [Date], check-out [Date], family of 4, by flight, snow activities, budget ₹40k', label: 'Manali Adventure', emoji: '🏔️' },
   ];
 
-  const quickDestinations = [
-    { label: 'Goa', emoji: '🏖️', query: 'Goa, 5 nights, 2 adults, beach resort, budget ₹60k' },
-    { label: 'Manali', emoji: '🏔️', query: 'Manali, 4 nights, 2 adults, snow & adventure, budget ₹40k' },
-    { label: 'Kerala', emoji: '🌿', query: 'Kerala, 6 nights, couple, backwaters & houseboat, budget ₹80k' },
-    { label: 'Rajasthan', emoji: '🏰', query: 'Rajasthan, 7 nights, family of 4, heritage & culture, budget ₹1.2L' },
-    { label: 'Leh–Ladakh', emoji: '🏕️', query: 'Leh, 6 nights, 2 adults, mountains & monasteries, budget ₹90k' },
-    { label: 'Udaipur', emoji: '🦢', query: 'Udaipur, 4 nights, couple, romantic lakes & palaces, budget ₹70k' },
-    { label: 'Rishikesh', emoji: '🕉️', query: 'Rishikesh, 3 nights, 2 adults, adventure & yoga, budget ₹30k' },
-    { label: 'Darjeeling', emoji: '🍵', query: 'Darjeeling, 4 nights, 2 adults, tea gardens & hills, budget ₹45k' },
-    { label: 'Andaman', emoji: '🐠', query: 'Andaman, 5 nights, couple, snorkelling & beaches, budget ₹80k' },
-    { label: 'Varanasi', emoji: '🪔', query: 'Varanasi, 3 nights, 2 adults, spiritual & cultural, budget ₹35k' },
-    { label: 'Dubai', emoji: '✈️', query: 'Dubai, 4 nights, family of 4, luxury shopping, budget ₹1.5L' },
-    { label: 'Bali', emoji: '🌺', query: 'Bali, 7 nights, couple, temples & beaches, budget ₹1.2L' },
-    { label: 'Maldives', emoji: '🐚', query: 'Maldives, 5 nights, couple, luxury overwater villa, budget ₹2L' },
-    { label: 'Thailand', emoji: '🐘', query: 'Thailand, 6 nights, family of 4, culture & beaches, budget ₹1.3L' },
-    { label: 'Singapore', emoji: '🦁', query: 'Singapore, 4 nights, family of 4, theme parks & food, budget ₹1.4L' },
-    { label: 'Paris', emoji: '🗼', query: 'Paris, 5 nights, couple, romantic Europe trip, budget ₹2.5L' },
-    { label: 'Japan', emoji: '🗾', query: 'Japan, 7 nights, 2 adults, culture & cuisine, budget ₹3L' },
-    { label: 'Switzerland', emoji: '🏔️', query: 'Switzerland, 6 nights, couple, mountains & lakes, budget ₹3.5L' },
-  ];
 
   const handleSearch = async (force = false) => {
     if (!query.trim()) return;
@@ -319,15 +319,22 @@ export function Dashboard() {
                   <Sparkles className="w-5 h-5 text-white" />
                 </div>
                 <div className="flex-1 w-full">
-                  <label className="block text-sm text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
                     Describe your client's trip requirements
                   </label>
+                  {/* Format Guide — single line */}
+                  <div className="mb-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2">
+                    <p className="text-[11px] text-blue-700">
+                      <span className="font-semibold">Format:</span>{' '}
+                      [Destination] · [Check-in Date] · [Check-out Date] · [No. of Travelers] · [Mode of Travel] · [Room type, meals, budget]
+                    </p>
+                  </div>
                   <div className="relative">
                     <textarea
                       ref={textareaRef}
                       value={query}
                       onChange={(e) => { setQuery(e.target.value); if (showMissingPopup) setShowMissingPopup(false); }}
-                      placeholder="Example: Goa, 5 nights, 2 adults + 1 child, budget ₹60k, beach vibe, mid-December, flexible dates"
+                      placeholder="E.g. [Dubai], check-in [15 Mar], check-out [19 Mar], [2 adults], by [flight], [deluxe room + breakfast], budget [₹1.5L]"
                       className={`w-full h-32 px-3 sm:px-4 py-2 sm:py-3 border rounded-xl resize-none focus:outline-none focus:ring-2 focus:border-transparent text-sm sm:text-base transition-colors ${
                         isListening
                           ? 'border-red-400 focus:ring-red-300 bg-red-50/30'
@@ -499,18 +506,32 @@ export function Dashboard() {
               </div>
             </div>
 
-            {/* Quick Destination Picker */}
+            {/* Quick Destination Picker — dataset-powered, 40 destinations */}
             <div className="mb-6">
               <h3 className="text-sm text-gray-500 mb-3 px-1 font-medium">Popular destinations — click to search:</h3>
-              <div className="flex flex-wrap gap-2">
-                {quickDestinations.map((dest) => (
-                  <button
-                    key={dest.label}
-                    onClick={() => { setQuery(dest.query); navigate('/packages', { state: { query: dest.query } }); }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-xs font-medium text-gray-700 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-all shadow-sm whitespace-nowrap"
-                  >
-                    <span>{dest.emoji}</span> {dest.label}
-                  </button>
+              <div className="space-y-2.5">
+                {REGION_GROUPS.map(({ label, dests }) => (
+                  <div key={label}>
+                    <p className="text-[11px] text-gray-400 font-semibold uppercase tracking-wide mb-1.5 px-0.5">{label}</p>
+                    <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+                      {dests.map(dest => {
+                        const budgetK = Math.round(dest.starting_package_pp_inr * 2 / 1000);
+                        const q = `${dest.city}, ${dest.sample_nights} nights, 2 adults, ${dest.theme}, budget ₹${budgetK}k`;
+                        return (
+                          <button
+                            key={dest.destination_id}
+                            onClick={() => { setQuery(q); navigate('/packages', { state: { query: q } }); }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-xs font-medium text-gray-700 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-all shadow-sm whitespace-nowrap flex-shrink-0"
+                          >
+                            <span>{getDestEmoji(dest.theme)}</span>
+                            <span>{dest.city}</span>
+                            <span className="text-gray-300 mx-0.5">·</span>
+                            <span className="text-emerald-600 font-semibold">₹{(dest.starting_package_pp_inr / 1000).toFixed(0)}k</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>

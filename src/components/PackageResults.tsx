@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from 'react-router';
 import { useState, useEffect } from 'react';
 import { Plane, Hotel, Car, Compass, TrendingUp, Check, ChevronRight, Star, Info, SlidersHorizontal, ArrowUpDown, GitCompare } from 'lucide-react';
-import { generateMockPackages } from '../utils/mockData';
+import { generatePackages, parseQuery } from '../utils/packageGenerator';
 import { TravelPackage } from '../types';
 import { PackageFilters } from './PackageFilters';
 import { PackageComparison } from './PackageComparison';
@@ -17,6 +17,8 @@ export function PackageResults() {
   const location = useLocation();
   const navigate = useNavigate();
   const query = location.state?.query || '';
+  const parsed = parseQuery(query);
+  const { destination, nights, adults } = parsed;
   const [packages, setPackages] = useState<TravelPackage[]>([]);
   const [filteredPackages, setFilteredPackages] = useState<TravelPackage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -46,9 +48,9 @@ export function PackageResults() {
         }
       } catch {}
 
-      // Fallback: use local mock data with simulated delay
+      // Fallback: use dataset-powered generator with simulated delay
       setTimeout(() => {
-        const generated = generateMockPackages();
+        const generated = generatePackages(destination, nights, adults);
         setPackages(generated);
         setFilteredPackages(generated);
         setIsLoading(false);
@@ -150,7 +152,11 @@ export function PackageResults() {
             <p className="text-gray-600 text-xs sm:text-sm mb-3">Based on: "{query}"</p>
             <div className="flex items-center gap-2 text-xs sm:text-sm text-gray-500">
               <Check className="w-4 h-4 text-green-600 flex-shrink-0" />
-              <span className="line-clamp-2">Intent extracted: Goa • 5 nights • 2 adults + 1 child • ₹60k budget • Beach vibe</span>
+              <span className="line-clamp-2">
+                Intent extracted: {destination} • {nights} night{nights !== 1 ? 's' : ''} • {adults} adult{adults !== 1 ? 's' : ''}
+                {parsed.budgetText ? ` • ${parsed.budgetText}` : ''}
+                {parsed.vibe ? ` • ${parsed.vibe}` : ''}
+              </span>
             </div>
           </div>
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
@@ -176,7 +182,7 @@ export function PackageResults() {
         </div>
       )}
 
-      {showDestinationGuide && <DestinationGuide destination="Goa" />}
+      {showDestinationGuide && <DestinationGuide destination={destination} />}
 
       {/* Filters and Sort Bar */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
@@ -351,7 +357,9 @@ export function PackageResults() {
                 </div>
                 <div className="bg-gray-50 rounded-lg p-3 sm:p-4 text-xs sm:text-sm text-gray-700">
                   {pkg.transfer.type} - {pkg.transfer.vehicle}
-                  <div className="text-xs text-gray-500 mt-1">Airport ↔ Hotel (Round trip)</div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {pkg.transfer.pickupLocation ?? `${pkg.outboundFlight.arrival} Airport`} → {pkg.transfer.dropoffLocation ?? pkg.hotel.name}
+                  </div>
                 </div>
               </div>
 

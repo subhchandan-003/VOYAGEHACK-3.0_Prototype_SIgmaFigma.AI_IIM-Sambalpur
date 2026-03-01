@@ -218,7 +218,7 @@ export function PackageFilters({ onFilterChange, isMobile = false }: PackageFilt
         <label className="flex items-center gap-2 cursor-pointer">
           <Checkbox
             checked={filters.transferIncluded}
-            onCheckedChange={(checked) => handleFilterChange('transferIncluded', checked)}
+            onCheckedChange={(checked: boolean) => handleFilterChange('transferIncluded', checked)}
           />
           <span className="text-sm font-medium text-gray-700">Airport Transfer Included</span>
         </label>

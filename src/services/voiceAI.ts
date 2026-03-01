@@ -1,3 +1,14 @@
+// ─── Demo dataset integration ─────────────────────────────────────────────────
+import {
+  buildDestinationContext,
+  calculatePackageCost,
+  getVisaProfileForCity,
+  findDemoDestination,
+} from '../data/demoDataset';
+
+// Re-export helpers used by other components
+export { buildDestinationContext, calculatePackageCost, getVisaProfileForCity, findDemoDestination };
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ExtractedIntent {
@@ -75,6 +86,9 @@ const DESTINATIONS = [
   'Bandhavgarh', 'Rann of Kutch',
   // India — Cities
   'Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Hyderabad', 'Kolkata', 'Pune',
+  // Dataset cities
+  'Jaipur', 'Udaipur', 'Srinagar', 'Leh', 'Port Blair', 'Havelock', 'Munnar',
+  'Alleppey', 'Coorg', 'Rishikesh', 'Manali',
   // International — Middle East
   'Dubai', 'Abu Dhabi', 'Qatar', 'Doha', 'Oman', 'Muscat', 'Jordan', 'Petra',
   // International — SE Asia
@@ -88,10 +102,12 @@ const DESTINATIONS = [
   // International — South Asia
   'Sri Lanka', 'Nepal', 'Kathmandu', 'Bhutan',
   // International — Europe
-  'Europe', 'Paris', 'London', 'Rome', 'Barcelona', 'Amsterdam',
-  'Switzerland', 'Zurich', 'Interlaken', 'Prague', 'Vienna',
-  'Istanbul', 'Turkey', 'Greece', 'Santorini',
+  'Europe', 'Paris', 'Nice', 'London', 'Rome', 'Venice', 'Barcelona', 'Amsterdam',
+  'Switzerland', 'Zurich', 'Lucerne', 'Interlaken', 'Prague', 'Vienna',
+  'Budapest', 'Istanbul', 'Cappadocia', 'Turkey', 'Greece', 'Santorini',
   'Iceland', 'Norway', 'Croatia', 'Dubrovnik', 'Portugal', 'Lisbon',
+  // International — Caucasus
+  'Tbilisi', 'Georgia', 'Baku', 'Azerbaijan',
   // International — Africa / Oceania
   'Mauritius', 'Seychelles', 'Safari', 'Cape Town', 'Morocco', 'Marrakech',
   'Egypt', 'Cairo', 'Australia', 'New Zealand', 'Fiji', 'Bora Bora',
@@ -302,6 +318,31 @@ export function extractIntentFromText(
   if (prefs.length) intent.preferences = prefs;
 
   return intent;
+}
+
+// ─── Dataset-powered helpers (exported for components) ────────────────────────
+
+/** Get the visa question for a destination (null = domestic / no action needed) */
+export function getVisaQuestion(destination: string): string | null {
+  const visa = getVisaProfileForCity(destination);
+  if (!visa || visa.visa_profile_id === 'V000') return null;
+  return visa.bot_question;
+}
+
+/** Build a formatted cost breakup string from collected intent */
+export function buildCostBreakup(intent: ExtractedIntent): string {
+  if (!intent.destination || !intent.nights || intent.adults === undefined) return '';
+  const result = calculatePackageCost({
+    destination: intent.destination,
+    nights: intent.nights,
+    adults: intent.adults,
+    hotelStar: 4,
+    activityCount: 2,
+    includePickup: true,
+    includeInsurance: false,
+  });
+  if (result.total === 0) return '';
+  return result.breakdown.join('\n');
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -642,6 +683,13 @@ export async function generateAIResponse(
   const intentSummary = buildIntentSummary(intent);
   const hasEnough = !!(intent.destination && (intent.nights || intent.budget) && intent.adults);
 
+  // Inject real dataset context for the destination if available
+  const destCtx = intent.destination ? buildDestinationContext(intent.destination) : '';
+  const visaQ = intent.destination ? getVisaQuestion(intent.destination) : null;
+  const costBreakup = (intent.destination && intent.nights && intent.adults !== undefined)
+    ? buildCostBreakup(intent)
+    : '';
+
   const systemPrompt = `You are TripBrain, the AI travel copilot for TBO.com. You help travellers plan complete trips through a warm, natural conversation.
 
 PERSONALITY: Warm, conversational, never robotic. Speak like a knowledgeable travel consultant.
@@ -699,6 +747,13 @@ RESPONSE FORMAT:
 SEARCH TRIGGER: When you have destination + dates + adult count, end your response with the exact token [SEARCH].
 Example: "Goa in July for 5 nights with 2 adults and a 60k budget — pulling those up now! [SEARCH]"
 
+${destCtx ? `LIVE DATASET FOR ${intent.destination?.toUpperCase()}:
+${destCtx}` : ''}
+${visaQ ? `VISA RULE: Before confirming search, ask: "${visaQ}"` : ''}
+${costBreakup ? `ESTIMATED COST BREAKUP (when user asks for price):
+${costBreakup}` : ''}
+ADD-ONS AVAILABLE: Airport pickup ₹1,600 | Drop-off ₹1,500 | Priority check-in ₹900 | Early check-in ₹1,800 | Insurance ₹1,200/person | Lounge ₹2,200/person
+
 Currently captured: ${intentSummary}
 Phase: ${phase}
 Ready to search: ${hasEnough ? 'YES — include [SEARCH] if not already triggered' : 'NO — still gathering Phase 1 info'}`;
@@ -724,6 +779,46 @@ Ready to search: ${hasEnough ? 'YES — include [SEARCH] if not already triggere
   const raw: string = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
   const shouldSearch = raw.includes('[SEARCH]');
   return { text: raw.replace('[SEARCH]', '').replace(/\s{2,}/g, ' ').trim(), shouldSearch };
+}
+
+export async function generateGeminiFollowUpResponse(
+  messages: CopilotMessage[],
+  tripSummary: string,
+  apiKey: string,
+): Promise<string> {
+  const contents = buildGeminiHistory(messages);
+  if (!contents.length) return '';
+
+  const systemPrompt = `You are TripBrain, a premium travel copilot for TBO.com.
+
+You are answering FOLLOW-UP questions after a scripted trip intake is complete.
+Use the user's trip details as context:
+${tripSummary}
+
+RULES:
+- Be concise and practical.
+- Max 3 short sentences.
+- Plain text only, no markdown, no bullets, no emojis.
+- If details are missing, ask exactly one clarifying question.
+- Do not restart the intake script.`;
+
+  const resp = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents,
+        generationConfig: { temperature: 0.35, maxOutputTokens: 220, topP: 0.9 },
+      }),
+    },
+  );
+
+  if (!resp.ok) throw new Error(`Gemini follow-up ${resp.status}`);
+  const data = await resp.json();
+  const raw: string = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  return raw.replace(/\s{2,}/g, ' ').trim();
 }
 
 // ─── Resolve API key from env or localStorage ─────────────────────────────────
