@@ -2,6 +2,7 @@ import { useParams, useNavigate, useLocation } from 'react-router';
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Lock, Unlock, RefreshCw, ChevronRight } from 'lucide-react';
 import { generateMockPackages } from '../utils/mockData';
+import { generatePackages, parseQuery } from '../utils/packageGenerator';
 import { packageApi } from '../services/api';
 
 export function PackageDetail() {
@@ -9,20 +10,27 @@ export function PackageDetail() {
   const navigate = useNavigate();
   const location = useLocation();
   const query: string = (location.state as any)?.query ?? '';
-  const [pkg, setPkg] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const statePackage = (location.state as any)?.pkg ?? null;
+  const [pkg, setPkg] = useState<any>(statePackage);
+  const [loading, setLoading] = useState(!statePackage);
 
   useEffect(() => {
+    if (statePackage) return; // Already have data from navigation state
     // Try Express API first, fall back to local mock
     packageApi.getById(id!).then(({ data, fromApi }) => {
       if (fromApi && data) {
         setPkg(data);
       } else {
-        setPkg(generateMockPackages().find(p => p.id === id) || null);
+        // Try dynamic generator with query context, then static mock
+        const parsed = parseQuery(query);
+        const generated = generatePackages(parsed.destination, parsed.nights, parsed.adults);
+        setPkg(generated.find(p => p.id === id) || generateMockPackages().find(p => p.id === id) || null);
       }
       setLoading(false);
     }).catch(() => {
-      setPkg(generateMockPackages().find(p => p.id === id) || null);
+      const parsed = parseQuery(query);
+      const generated = generatePackages(parsed.destination, parsed.nights, parsed.adults);
+      setPkg(generated.find(p => p.id === id) || generateMockPackages().find(p => p.id === id) || null);
       setLoading(false);
     });
   }, [id]);
@@ -232,7 +240,7 @@ export function PackageDetail() {
           </div>
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
             <button onClick={() => navigate('/packages')} className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-sm">Cancel</button>
-            <button onClick={() => navigate(`/quote/${pkg.id}`, { state: { query } })} className="px-4 sm:px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 text-sm">
+            <button onClick={() => navigate(`/quote/${pkg.id}`, { state: { query, pkg } })} className="px-4 sm:px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 text-sm">
               Generate Quote
               <ChevronRight className="w-4 h-4" />
             </button>

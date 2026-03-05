@@ -5,7 +5,7 @@ import { generateMockPackages } from '../utils/mockData';
 import { saveTrip, generateId } from '../utils/storage';
 import { Trip } from '../types';
 import { packageApi, quoteApi, tripApi } from '../services/api';
-import { parseQuery } from '../utils/packageGenerator';
+import { parseQuery, generatePackages } from '../utils/packageGenerator';
 
 export function QuoteBuilder() {
   const { id } = useParams();
@@ -17,23 +17,32 @@ export function QuoteBuilder() {
   const queryStr: string = (location.state as any)?.query ?? '';
   const parsed = parseQuery(queryStr);
 
+  const statePackage = (location.state as any)?.pkg ?? null;
   const [markup, setMarkup] = useState(10);
   const [clientEmail, setClientEmail] = useState('');
   const [clientName, setClientName] = useState('');
   const [notes, setNotes] = useState('');
   const [sent, setSent] = useState(false);
 
-  // Load package from API or mock
+  // Load package from route state, API, or mock
   useEffect(() => {
+    if (statePackage) {
+      setPkg(statePackage);
+      setLoading(false);
+      return;
+    }
     packageApi.getById(id!).then(({ data, fromApi }) => {
       if (fromApi && data) {
         setPkg(data);
       } else {
-        setPkg(generateMockPackages().find(p => p.id === id) || null);
+        // Try dynamic generator with query context, then static mock
+        const generated = generatePackages(parsed.destination, parsed.nights, parsed.adults);
+        setPkg(generated.find(p => p.id === id) || generateMockPackages().find(p => p.id === id) || null);
       }
       setLoading(false);
     }).catch(() => {
-      setPkg(generateMockPackages().find(p => p.id === id) || null);
+      const generated = generatePackages(parsed.destination, parsed.nights, parsed.adults);
+      setPkg(generated.find(p => p.id === id) || generateMockPackages().find(p => p.id === id) || null);
       setLoading(false);
     });
   }, [id]);
@@ -113,7 +122,21 @@ export function QuoteBuilder() {
     saveTrip(newTrip);
 
     setSent(true);
-    setTimeout(() => navigate('/trips'), 2000);
+    setTimeout(() => navigate('/billing', {
+      state: {
+        pkg,
+        clientName: clientName || clientEmail.split('@')[0],
+        clientEmail,
+        notes,
+        subtotal,
+        markupAmount,
+        taxes,
+        finalTotal: Math.round(finalTotal),
+        tripId: newTrip.id,
+        pnr: newTrip.pnr,
+        query: queryStr,
+      },
+    }), 2000);
   };
 
   return (

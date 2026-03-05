@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(node_modules/.bin/tsc --noEmit)",
-      "Bash(npm run build)"
+      "Bash(npm run build)",
+      "Skill(claude-developer-platform)",
+      "Skill(claude-developer-platform:*)",
+      "Bash(npm install @anthropic-ai/sdk)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\LENOVO\\.claude\\projects\\c--Users-LENOVO-Desktop-Prototypes-Travel-Agent-Assistant"
     ]
   }
 }

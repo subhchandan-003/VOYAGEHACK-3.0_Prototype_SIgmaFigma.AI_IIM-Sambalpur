@@ -1,5 +1,6 @@
 import React from 'react';
-import { Bot, Send, X, Volume2, VolumeX, RotateCcw, Sparkles, Mic, MicOff } from 'lucide-react';
+import { Bot, Send, X, Volume2, VolumeX, RotateCcw, Sparkles, Mic, MicOff, ArrowRight } from 'lucide-react';
+import { useNavigate } from 'react-router';
 import {
   CopilotMessage,
   generateGeminiFollowUpResponse,
@@ -142,6 +143,18 @@ function buildTripSummary(state: TripScriptState): string {
   ].join('\n');
 }
 
+/** Convert copilot script state into a search query string compatible with parseQuery/extractIntentFromText */
+function buildSearchQuery(state: TripScriptState): string {
+  const parts: string[] = [];
+  if (state.destination) parts.push(state.destination);
+  if (state.dates) parts.push(state.dates);
+  if (state.travelers) parts.push(state.travelers);
+  if (state.travelClass) parts.push(`${state.travelClass} class`);
+  if (state.stayPreference) parts.push(state.stayPreference);
+  if (state.roomSetup) parts.push(state.roomSetup);
+  return parts.join(', ');
+}
+
 function RichText({ text }: { text: string }) {
   return (
     <>
@@ -159,6 +172,7 @@ export function VoiceCopilot({
   open: controlledOpen,
   onOpenChange,
 }: { open?: boolean; onOpenChange?: (v: boolean) => void } = {}) {
+  const navigate = useNavigate();
   const [_internalOpen, _setInternalOpen] = React.useState(false);
   const isOpen = controlledOpen !== undefined ? controlledOpen : _internalOpen;
   const setIsOpen = (v: boolean) => onOpenChange ? onOpenChange(v) : _setInternalOpen(v);
@@ -297,8 +311,27 @@ export function VoiceCopilot({
       const summary = buildTripSummary(nextState);
 
       if (isAffirmative(text)) {
-        const doneText = `Perfect — here's your trip summary:\n${summary}\n\nYour intake is complete. Ask me any follow-up question and I'll help with options, budget, visas, or optimization.`;
+        const doneText = `Perfect — here's your trip summary:\n${summary}\n\nRedirecting you to browse matching packages and generate a quote...`;
         pushBot(doneText);
+
+        // Build query and redirect to packages page after a short delay
+        const query = buildSearchQuery(nextState);
+        setTimeout(() => {
+          navigate('/packages', {
+            state: {
+              query,
+              copilotSummary: {
+                destination: nextState.destination,
+                flightAssistance: nextState.flightAssistance,
+                travelClass: nextState.travelClass,
+                travelers: nextState.travelers,
+                stayPreference: nextState.stayPreference,
+                roomSetup: nextState.roomSetup,
+                dates: nextState.dates,
+              },
+            },
+          });
+        }, 2000);
       } else {
         pushBot(`No problem — share what you want to change, and I'll guide you through updates or answer any follow-up question.`);
       }
@@ -582,6 +615,29 @@ export function VoiceCopilot({
 
               {scriptComplete && !isThinking && !isListening && messages.length > 0 && (
                 <div className="pt-2 flex flex-col gap-2">
+                  <button
+                    onClick={() => {
+                      const query = buildSearchQuery(scriptState);
+                      navigate('/packages', {
+                        state: {
+                          query,
+                          copilotSummary: {
+                            destination: scriptState.destination,
+                            flightAssistance: scriptState.flightAssistance,
+                            travelClass: scriptState.travelClass,
+                            travelers: scriptState.travelers,
+                            stayPreference: scriptState.stayPreference,
+                            roomSetup: scriptState.roomSetup,
+                            dates: scriptState.dates,
+                          },
+                        },
+                      });
+                    }}
+                    className="w-full text-sm px-4 py-3 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-semibold hover:from-indigo-700 hover:to-violet-700 shadow-lg shadow-indigo-300/40 transition-all hover:shadow-xl flex items-center justify-center gap-2"
+                  >
+                    <ArrowRight className="w-4 h-4" />
+                    View Packages & Generate Quote
+                  </button>
                   <p className="text-[10px] font-medium text-gray-400 text-center uppercase tracking-wide">Suggested follow-ups</p>
                   {['Show my trip summary', 'Can you optimize the budget?', 'Any visa tips for this trip?'].map(s => (
                     <button

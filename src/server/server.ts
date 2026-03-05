@@ -26,6 +26,7 @@ import packageRoutes from './routes/packages';
 import tripRoutes from './routes/trips';
 import quoteRoutes from './routes/quotes';
 import searchRoutes from './routes/searches';
+import visionRoutes from './routes/vision';
 
 dotenv.config();
 
@@ -51,6 +52,7 @@ app.use('/api/packages', packageRoutes);
 app.use('/api/trips', tripRoutes);
 app.use('/api/quotes', quoteRoutes);
 app.use('/api/searches', searchRoutes);
+app.use('/api/vision', visionRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {

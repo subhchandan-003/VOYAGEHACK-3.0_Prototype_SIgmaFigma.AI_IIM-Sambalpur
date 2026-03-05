@@ -17,6 +17,7 @@ export function PackageResults() {
   const location = useLocation();
   const navigate = useNavigate();
   const query = location.state?.query || '';
+  const copilotSummary = location.state?.copilotSummary || null;
   const parsed = parseQuery(query);
   const { destination, nights, adults } = parsed;
   const [packages, setPackages] = useState<TravelPackage[]>([]);
@@ -142,6 +143,42 @@ export function PackageResults() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+      {/* Copilot Trip Summary Banner */}
+      {copilotSummary && (
+        <div className="bg-gradient-to-r from-indigo-50 via-violet-50 to-purple-50 border border-indigo-200 rounded-xl p-4 sm:p-5 mb-4 sm:mb-6">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center flex-shrink-0 shadow-sm">
+              <Compass className="w-4 h-4 text-white" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-indigo-900 mb-2">Trip Copilot — Your Trip Requirements</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5 text-xs text-gray-700">
+                {copilotSummary.destination && (
+                  <div><span className="font-medium text-gray-500">Destination:</span> {copilotSummary.destination}</div>
+                )}
+                {copilotSummary.travelClass && (
+                  <div><span className="font-medium text-gray-500">Class:</span> {copilotSummary.travelClass}</div>
+                )}
+                {copilotSummary.travelers && (
+                  <div><span className="font-medium text-gray-500">Travelers:</span> {copilotSummary.travelers}</div>
+                )}
+                {copilotSummary.stayPreference && (
+                  <div><span className="font-medium text-gray-500">Stay:</span> {copilotSummary.stayPreference}</div>
+                )}
+                {copilotSummary.roomSetup && (
+                  <div><span className="font-medium text-gray-500">Rooms:</span> {copilotSummary.roomSetup}</div>
+                )}
+                {copilotSummary.dates && (
+                  <div><span className="font-medium text-gray-500">Dates:</span> {copilotSummary.dates}</div>
+                )}
+                {copilotSummary.flightAssistance && (
+                  <div><span className="font-medium text-gray-500">Flights:</span> {copilotSummary.flightAssistance}</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Search Summary */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 mb-4 sm:mb-6">
         <div className="flex flex-col sm:flex-row items-start justify-between gap-4">
@@ -394,13 +431,13 @@ export function PackageResults() {
             {/* Actions */}
             <div className="p-4 sm:p-6 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 rounded-b-xl">
               <button
-                onClick={() => navigate(`/package/${pkg.id}`, { state: { query } })}
+                onClick={() => navigate(`/package/${pkg.id}`, { state: { query, pkg } })}
                 className="px-4 py-2 text-sm border border-gray-300 bg-white rounded-lg hover:bg-gray-50 transition-colors"
               >
                 Customize Package
               </button>
               <button
-                onClick={() => navigate(`/quote/${pkg.id}`, { state: { query } })}
+                onClick={() => navigate(`/quote/${pkg.id}`, { state: { query, pkg, copilotSummary } })}
                 className="px-4 sm:px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 transition-colors"
               >
                 Generate Quote

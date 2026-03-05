@@ -1,12 +1,12 @@
 import React from 'react';
 import { useNavigate } from 'react-router';
-import { TrendingUp, Search, IndianRupee, Mic, MicOff, Sparkles, MapPin, Calendar, Users, Package, Globe, Shield, ArrowRight, ChevronDown, AlertCircle, X } from 'lucide-react';
+import { TrendingUp, Search, IndianRupee, Mic, MicOff, Sparkles, MapPin, Calendar, Users, Package, Globe, Shield, ArrowRight, ChevronDown, AlertCircle, X, Camera } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { AdvancedSearch } from './AdvancedSearch';
 import { PopularPackages } from './PopularPackages';
 import { RecentSearches } from './RecentSearches';
 import { TrendingDestinations } from './TrendingDestinations';
-import { VisualSearch } from './VisualSearch';
+import { VisualSearch, type VisualSearchHandle } from './VisualSearch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { tripApi, searchApi } from '../services/api';
@@ -59,6 +59,7 @@ export function Dashboard() {
   const demoAbortRef = React.useRef(false);
   const langMenuRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const visualSearchRef = React.useRef<VisualSearchHandle>(null);
 
   // Friendly labels and icons for each missing field
   const FIELD_META: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -395,6 +396,15 @@ export function Dashboard() {
                   </div>
 
                   <button
+                    type="button"
+                    title="Search by image — identify any landmark or destination"
+                    onClick={() => visualSearchRef.current?.triggerUpload()}
+                    className="px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl flex-shrink-0 flex items-center gap-2 text-sm sm:text-base bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200 transition-all"
+                  >
+                    <Camera className="w-5 h-5" />
+                    <span className="hidden sm:inline font-medium">Photo</span>
+                  </button>
+                  <button
                     onClick={toggleListening}
                     type="button"
                     title={isListening ? 'Stop listening' : `Start voice input in ${SUPPORTED_LANGUAGES.find(l => l.code === voiceLang)?.name ?? 'English'}`}
@@ -566,7 +576,7 @@ export function Dashboard() {
         <RecentSearches onSearchSelect={handleRecentSearchSelect} />
 
         {/* Visual Search - Image to Trip */}
-        <VisualSearch />
+        <VisualSearch ref={visualSearchRef} />
 
         {/* Trending Destinations */}
         <TrendingDestinations />
